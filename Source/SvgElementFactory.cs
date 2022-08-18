@@ -1,10 +1,9 @@
-﻿// todo: add license
+﻿// Microsoft Public License (Ms-PL). https://github.com/sst-soft/SVG which is a fork of https://github.com/svg-net/SVG.
 
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Xml;
-using ExCSS;
 
 namespace Svg
 {

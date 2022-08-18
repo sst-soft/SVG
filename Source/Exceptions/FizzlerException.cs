@@ -1,14 +1,8 @@
-﻿// todo: add license
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿// Microsoft Public License (Ms-PL). https://github.com/sst-soft/SVG which is a fork of https://github.com/svg-net/SVG.
 
 namespace Svg.Exceptions
 {
-    internal class FizzlerException: Exception
+    internal class FizzlerException : Exception
     {
     }
 }
