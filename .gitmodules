@@ -1,3 +1,6 @@
 [submodule "Fizzler"]
 	path = Fizzler
 	url = https://github.com/sst-soft/Fizzler
+[submodule "ExCSS"]
+	path = ExCSS
+	url = https://github.com/sst-soft/ExCSS
