@@ -11,6 +11,7 @@ using System.Text;
 using System.Xml;
 using Svg.Css;
 using Svg.Exceptions;
+using ExCSS;
 
 namespace Svg
 {

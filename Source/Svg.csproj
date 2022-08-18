@@ -49,4 +49,9 @@
     <PackageReference Include="System.Drawing.Common" Version="6.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\ExCSS\ExCSS\ExCSS.csproj" />
+    <ProjectReference Include="..\Fizzler\src\Fizzler.csproj" />
+  </ItemGroup>
+
 </Project>

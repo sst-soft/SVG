@@ -5,6 +5,10 @@ VisualStudioVersion = 17.3.32804.467
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Svg", "Source\Svg.csproj", "{21C686DD-3AFD-4A3C-9D8F-A2608A08F376}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ExCSS", "ExCSS\ExCSS\ExCSS.csproj", "{A495B134-58C9-4513-8B05-845C9F0D2679}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Fizzler", "Fizzler\src\Fizzler.csproj", "{713E8997-11CE-420B-A746-8DF7A986902B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +19,14 @@ Global
 		{21C686DD-3AFD-4A3C-9D8F-A2608A08F376}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{21C686DD-3AFD-4A3C-9D8F-A2608A08F376}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{21C686DD-3AFD-4A3C-9D8F-A2608A08F376}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A495B134-58C9-4513-8B05-845C9F0D2679}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A495B134-58C9-4513-8B05-845C9F0D2679}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A495B134-58C9-4513-8B05-845C9F0D2679}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A495B134-58C9-4513-8B05-845C9F0D2679}.Release|Any CPU.Build.0 = Release|Any CPU
+		{713E8997-11CE-420B-A746-8DF7A986902B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{713E8997-11CE-420B-A746-8DF7A986902B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{713E8997-11CE-420B-A746-8DF7A986902B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{713E8997-11CE-420B-A746-8DF7A986902B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
