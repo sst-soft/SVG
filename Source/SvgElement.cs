@@ -1,261 +1,198 @@
-﻿using System;
-using System.Collections.Generic;
+﻿// todo: add license
+
 using System.ComponentModel;
-using System.Linq;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Reflection;
 using System.Xml;
+using Svg.Document_Structure;
 using Svg.Transforms;
 
 namespace Svg
 {
-    /// <summary>
-    /// The base class of which all SVG elements are derived from.
-    /// </summary>
-    public abstract partial class SvgElement : ISvgElement, ISvgTransformable, ICloneable, ISvgNode
+    public abstract class SvgElement : ISvgElement, ISvgTransformable, ICloneable, ISvgNode
     {
         internal const int StyleSpecificity_PresAttribute = 0;
-        internal const int StyleSpecificity_InlineStyle = 1 << 16;
-#if !USE_SOURCE_GENERATORS
-        //optimization
-        protected class PropertyAttributeTuple
-        {
-            public PropertyDescriptor Property;
-            public SvgAttributeAttribute Attribute;
-        }
-
-        protected class EventAttributeTuple
-        {
-            public FieldInfo Event;
-            public SvgAttributeAttribute Attribute;
-        }
-
-        //reflection cache
-        private IEnumerable<PropertyAttributeTuple> _svgPropertyAttributes;
-        private IEnumerable<EventAttributeTuple> _svgEventAttributes;
-#endif
+        internal const int StyleSpecificity_InlineStyle = 65536;
+        private readonly IEnumerable<SvgElement.PropertyAttributeTuple> _svgPropertyAttributes;
+        private readonly IEnumerable<SvgElement.EventAttributeTuple> _svgEventAttributes;
         internal SvgElement _parent;
         private string _elementName;
         private SvgAttributeCollection _attributes;
-        private EventHandlerList _eventHandlers;
-        private SvgElementCollection _children;
+        private readonly EventHandlerList _eventHandlers;
+        private readonly SvgElementCollection _children;
         private static readonly object _loadEventKey = new object();
-        private SvgCustomAttributeCollection _customAttributes;
-        private List<ISvgNode> _nodes = new List<ISvgNode>();
-
+        private Matrix _graphicsTransform;
+        private Region _graphicsClip;
+        private readonly SvgCustomAttributeCollection _customAttributes;
+        private readonly List<ISvgNode> _nodes = new List<ISvgNode>();
         private Dictionary<string, SortedDictionary<int, string>> _styles = new Dictionary<string, SortedDictionary<int, string>>();
+        private string _content;
+        public bool AutoPublishEvents = true;
+        private bool _dirty;
+        public static PrivateFontCollection PrivateFonts = new PrivateFontCollection();
 
-        /// <summary>
-        /// Add style.
-        /// </summary>
-        /// <param name="name">The style name.</param>
-        /// <param name="value">The style value.</param>
-        /// <param name="specificity">The specificity value.</param>
         public void AddStyle(string name, string value, int specificity)
         {
-            SortedDictionary<int, string> rules;
-            if (!_styles.TryGetValue(name, out rules))
+            if (!_styles.TryGetValue(name, out SortedDictionary<int, string> sortedDictionary))
             {
-                rules = new SortedDictionary<int, string>();
-                _styles[name] = rules;
+                sortedDictionary = new SortedDictionary<int, string>();
+                _styles[name] = sortedDictionary;
             }
-            while (rules.ContainsKey(specificity)) ++specificity;
-            rules[specificity] = value;
+            while (sortedDictionary.ContainsKey(specificity))
+            {
+                ++specificity;
+            }
+
+            sortedDictionary[specificity] = value;
         }
 
-        /// <summary>
-        /// Flush styles.
-        /// </summary>
-        /// <param name="children">If true, flush styles to the children.</param>
         public void FlushStyles(bool children = false)
         {
             FlushStyles();
-            if (children)
-                foreach (var child in Children)
-                    child.FlushStyles(children);
+            if (!children)
+            {
+                return;
+            }
+
+            foreach (SvgElement child in Children)
+            {
+                child.FlushStyles(children);
+            }
         }
 
         private void FlushStyles()
         {
-            if (_styles.Any())
+            if (!_styles.Any<KeyValuePair<string, SortedDictionary<int, string>>>())
             {
-                var styles = new Dictionary<string, SortedDictionary<int, string>>();
-                foreach (var s in _styles)
-                    if (!SvgElementFactory.SetPropertyValue(this, string.Empty, s.Key, s.Value.Last().Value, OwnerDocument, true))
-                        styles.Add(s.Key, s.Value);
-                _styles = styles;
+                return;
             }
+
+            Dictionary<string, SortedDictionary<int, string>> dictionary = new Dictionary<string, SortedDictionary<int, string>>();
+            foreach (KeyValuePair<string, SortedDictionary<int, string>> style in _styles)
+            {
+                if (!SvgElementFactory.SetPropertyValue(this, style.Key, style.Value.Last<KeyValuePair<int, string>>().Value, OwnerDocument, true))
+                {
+                    dictionary.Add(style.Key, style.Value);
+                }
+            }
+            _styles = dictionary;
         }
 
         public bool ContainsAttribute(string name)
         {
-            SortedDictionary<int, string> rules;
-            return (this.Attributes.ContainsKey(name) || this.CustomAttributes.ContainsKey(name) ||
-                (_styles.TryGetValue(name, out rules)) && (rules.ContainsKey(StyleSpecificity_InlineStyle) || rules.ContainsKey(StyleSpecificity_PresAttribute)));
-        }
-        public bool TryGetAttribute(string name, out string value)
-        {
-            object objValue;
-            if (this.Attributes.TryGetValue(name, out objValue))
+            if (Attributes.ContainsKey(name) || CustomAttributes.ContainsKey(name))
             {
-                value = objValue.ToString();
                 return true;
             }
-            if (this.CustomAttributes.TryGetValue(name, out value)) return true;
-            SortedDictionary<int, string> rules;
-            if (_styles.TryGetValue(name, out rules))
+
+            if (!_styles.TryGetValue(name, out SortedDictionary<int, string> sortedDictionary))
             {
-                // Get staged styles that are
-                if (rules.TryGetValue(StyleSpecificity_InlineStyle, out value)) return true;
-                if (rules.TryGetValue(StyleSpecificity_PresAttribute, out value)) return true;
+                return false;
             }
-            return false;
+
+            return sortedDictionary.ContainsKey(65536) || sortedDictionary.ContainsKey(0);
         }
 
-        /// <summary>
-        /// Gets the namespaces that element has.
-        /// </summary>
-        /// <value>Key is prefix and value is namespace.</value>
-        public Dictionary<string, string> Namespaces { get; } = new Dictionary<string, string>();
+        public bool TryGetAttribute(string name, out string value)
+        {
+            if (Attributes.TryGetValue(name, out var obj))
+            {
+                value = obj.ToString();
+                return true;
+            }
+            return CustomAttributes.TryGetValue(name, out value) || _styles.TryGetValue(name, out SortedDictionary<int, string> sortedDictionary) && (sortedDictionary.TryGetValue(65536, out value) || sortedDictionary.TryGetValue(0, out value));
+        }
 
-        /// <summary>
-        /// Gets the elements namespace as a string.
-        /// </summary>
-        protected internal string ElementNamespace { get; protected set; } = SvgNamespaces.SvgNamespace;
-
-        /// <summary>
-        /// Gets the name of the element.
-        /// </summary>
         protected internal string ElementName
         {
             get
             {
-                if (string.IsNullOrEmpty(this._elementName))
+                if (string.IsNullOrEmpty(_elementName))
                 {
-#if USE_SOURCE_GENERATORS
-                    // There is special case for SvgDocument as valid attribute is only set on SvgFragment.
-                    if (SvgElements.ElementNames.TryGetValue(this.GetType(), out var elementName))
+                    SvgElementAttribute elementAttribute = TypeDescriptor.GetAttributes(this).OfType<SvgElementAttribute>().SingleOrDefault<SvgElementAttribute>();
+                    if (elementAttribute != null)
                     {
-                        this._elementName = elementName;
+                        _elementName = elementAttribute.ElementName;
                     }
-                    else if (this is SvgDocument)
-                    {
-                        // The SvgDocument does not have SvgElement attribute set, instead the attitude is used on SvgFragment so there would be duplicate im dictionary.
-                        // The SvgDocument is not valid Svg element (that is SvgFragment) and is mainly used as abstraction for document reading and writing.
-                        // The ElementName for SvgDocument is set explicitly here as that is the exception to attribute convention used accross codebase.
-                        this._elementName = "svg";
-                    }
-#else
-                    var attr = TypeDescriptor.GetAttributes(this).OfType<SvgElementAttribute>().SingleOrDefault();
-                    if (attr != null)
-                    {
-                        this._elementName = attr.ElementName;
-                    }
-#endif
                 }
-
-                return this._elementName;
+                return _elementName;
             }
-            internal set { this._elementName = value; }
+            internal set => _elementName = value;
         }
 
-        /// <summary>
-        /// Gets or sets the color <see cref="SvgPaintServer"/> of this element which drives the currentColor property.
-        /// </summary>
         [SvgAttribute("color")]
         public virtual SvgPaintServer Color
         {
-            get { return GetAttribute("color", true, SvgPaintServer.NotSet); }
-            set { Attributes["color"] = value; }
+            get => GetAttribute<SvgPaintServer>("color", true, SvgPaintServer.NotSet);
+            set => Attributes["color"] = value;
         }
 
-        /// <summary>
-        /// Gets or sets the content of the element.
-        /// </summary>
-        private string _content;
         public virtual string Content
         {
-            get
-            {
-                return _content;
-            }
+            get => _content;
             set
             {
                 if (_content != null)
                 {
-                    var oldVal = _content;
+                    var content = _content;
                     _content = value;
-                    if (_content != oldVal)
-                        OnContentChanged(new ContentEventArgs { Content = value });
+                    if (!(_content != content))
+                    {
+                        return;
+                    }
+
+                    OnContentChanged(new ContentEventArgs()
+                    {
+                        Content = value
+                    });
                 }
                 else
                 {
                     _content = value;
-                    OnContentChanged(new ContentEventArgs { Content = value });
+                    OnContentChanged(new ContentEventArgs()
+                    {
+                        Content = value
+                    });
                 }
             }
         }
 
-        /// <summary>
-        /// Gets an <see cref="EventHandlerList"/> of all events belonging to the element.
-        /// </summary>
-        protected virtual EventHandlerList Events
-        {
-            get { return this._eventHandlers; }
-        }
+        protected virtual EventHandlerList Events => _eventHandlers;
 
-        /// <summary>
-        /// Occurs when the element is loaded.
-        /// </summary>
         public event EventHandler Load
         {
-            add { this.Events.AddHandler(_loadEventKey, value); }
-            remove { this.Events.RemoveHandler(_loadEventKey, value); }
+            add => Events.AddHandler(SvgElement._loadEventKey, value);
+            remove => Events.RemoveHandler(SvgElement._loadEventKey, value);
         }
 
-        /// <summary>
-        /// Gets a collection of all child <see cref="SvgElement"/> objects.
-        /// </summary>
-        public virtual SvgElementCollection Children
-        {
-            get { return this._children; }
-        }
+        public virtual SvgElementCollection Children => _children;
 
-        public IList<ISvgNode> Nodes
-        {
-            get { return this._nodes; }
-        }
+        public IList<ISvgNode> Nodes => _nodes;
 
         public IEnumerable<SvgElement> Descendants()
         {
-            return this.AsEnumerable().Descendants();
+            return AsEnumerable().Descendants<SvgElement>();
         }
+
         private IEnumerable<SvgElement> AsEnumerable()
         {
             yield return this;
         }
 
-        /// <summary>
-        /// Gets a value to determine whether the element has children.
-        /// </summary>
         public virtual bool HasChildren()
         {
-            return (this.Children.Count > 0);
+            return Children.Count > 0;
         }
 
-        /// <summary>
-        /// Gets the parent <see cref="SvgElement"/>.
-        /// </summary>
-        /// <value>An <see cref="SvgElement"/> if one exists; otherwise null.</value>
-        public virtual SvgElement Parent
-        {
-            get { return this._parent; }
-        }
+        public virtual SvgElement Parent => _parent;
 
         public IEnumerable<SvgElement> Parents
         {
             get
             {
-                var curr = this;
+                SvgElement curr = this;
                 while (curr.Parent != null)
                 {
                     curr = curr.Parent;
@@ -263,11 +200,12 @@ namespace Svg
                 }
             }
         }
+
         public IEnumerable<SvgElement> ParentsAndSelf
         {
             get
             {
-                var curr = this;
+                SvgElement curr = this;
                 yield return curr;
                 while (curr.Parent != null)
                 {
@@ -277,9 +215,6 @@ namespace Svg
             }
         }
 
-        /// <summary>
-        /// Gets the owner <see cref="SvgDocument"/>.
-        /// </summary>
         public virtual SvgDocument OwnerDocument
         {
             get
@@ -288,93 +223,137 @@ namespace Svg
                 {
                     return this as SvgDocument;
                 }
-                else
-                {
-                    if (this.Parent != null)
-                        return Parent.OwnerDocument;
-                    else
-                        return null;
-                }
+
+                return Parent != null ? Parent.OwnerDocument : null;
             }
         }
 
-        /// <summary>
-        /// Gets a collection of element attributes.
-        /// </summary>
         protected internal virtual SvgAttributeCollection Attributes
         {
             get
             {
-                if (this._attributes == null)
+                if (_attributes == null)
                 {
-                    this._attributes = new SvgAttributeCollection(this);
+                    _attributes = new SvgAttributeCollection(this);
                 }
 
-                return this._attributes;
+                return _attributes;
             }
         }
 
         protected bool Writing { get; set; }
 
-        protected internal TAttributeType GetAttribute<TAttributeType>(string attributeName, bool inherited, TAttributeType defaultValue = default(TAttributeType))
+        protected internal TAttributeType GetAttribute<TAttributeType>(
+          string attributeName,
+          bool inherited,
+          TAttributeType defaultValue = default(TAttributeType)) //PIX = null)
         {
-            if (Writing)
-                return Attributes.GetAttribute(attributeName, defaultValue);
-            else
-                return Attributes.GetInheritedAttribute(attributeName, inherited, defaultValue);
+            return Writing ? Attributes.GetAttribute<TAttributeType>(attributeName, defaultValue) : Attributes.GetInheritedAttribute<TAttributeType>(attributeName, inherited, defaultValue);
         }
 
-        /// <summary>
-        /// Gets a collection of custom attributes
-        /// </summary>
-        public SvgCustomAttributeCollection CustomAttributes
+        public SvgCustomAttributeCollection CustomAttributes => _customAttributes;
+
+        protected internal virtual bool PushTransforms(ISvgRenderer renderer)
         {
-            get { return this._customAttributes; }
+            _graphicsTransform = renderer.Transform;
+            _graphicsClip = renderer.GetClip();
+            SvgTransformCollection transforms = Transforms;
+            if (transforms == null || transforms.Count == 0)
+            {
+                return true;
+            }
+
+            using (Matrix matrix1 = transforms.GetMatrix())
+            {
+                using (Matrix matrix2 = new Matrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f))
+                {
+                    if (matrix2.Equals(matrix1))
+                    {
+                        return false;
+                    }
+                }
+                using (Matrix matrix3 = _graphicsTransform.Clone())
+                {
+                    matrix3.Multiply(matrix1);
+                    renderer.Transform = matrix3;
+                }
+            }
+            return true;
         }
 
-        /// <summary>
-        /// Gets or sets the element transforms.
-        /// </summary>
-        /// <value>The transforms.</value>
+        protected internal virtual void PopTransforms(ISvgRenderer renderer)
+        {
+            renderer.Transform = _graphicsTransform;
+            _graphicsTransform.Dispose();
+            _graphicsTransform = null;
+            renderer.SetClip(_graphicsClip);
+            _graphicsClip = null;
+        }
+
+        void ISvgTransformable.PushTransforms(ISvgRenderer renderer)
+        {
+            PushTransforms(renderer);
+        }
+
+        void ISvgTransformable.PopTransforms(ISvgRenderer renderer)
+        {
+            PopTransforms(renderer);
+        }
+
         [SvgAttribute("transform")]
         public SvgTransformCollection Transforms
         {
-            get { return GetAttribute<SvgTransformCollection>("transform", false); }
+            get => GetAttribute<SvgTransformCollection>("transform", false);
             set
             {
-                var old = Transforms;
-                if (old != null)
-                    old.TransformChanged -= Attributes_AttributeChanged;
-                value.TransformChanged += Attributes_AttributeChanged;
+                SvgTransformCollection transforms = Transforms;
+                if (transforms != null)
+                {
+                    transforms.TransformChanged -= new EventHandler<AttributeEventArgs>(Attributes_AttributeChanged);
+                }
+
+                value.TransformChanged += new EventHandler<AttributeEventArgs>(Attributes_AttributeChanged);
                 Attributes["transform"] = value;
             }
         }
 
-        /// <summary>
-        /// Gets or sets the ID of the element.
-        /// </summary>
-        /// <exception cref="SvgException">The ID is already used within the <see cref="SvgDocument"/>.</exception>
+        protected RectangleF TransformedBounds(RectangleF bounds)
+        {
+            if (Transforms == null || Transforms.Count <= 0)
+            {
+                return bounds;
+            }
+
+            using (GraphicsPath graphicsPath = new GraphicsPath())
+            {
+                using (Matrix matrix = Transforms.GetMatrix())
+                {
+                    graphicsPath.AddRectangle(bounds);
+                    graphicsPath.Transform(matrix);
+                    return graphicsPath.GetBounds();
+                }
+            }
+        }
+
         [SvgAttribute("id")]
         public string ID
         {
-            get { return GetAttribute<string>("id", false); }
-            set { SetAndForceUniqueID(value, false); }
+            get => GetAttribute<string>("id", false);
+            set => SetAndForceUniqueID(value, false);
         }
 
-        /// <summary>
-        /// Gets or sets the space handling.
-        /// </summary>
-        /// <value>The space handling.</value>
-        [SvgAttribute("space", SvgAttributeAttribute.XmlNamespace)]
+        [SvgAttribute("space", "http://www.w3.org/XML/1998/namespace")]
         public virtual XmlSpaceHandling SpaceHandling
         {
-            get { return GetAttribute("space", true, XmlSpaceHandling.Inherit); }
-            set { Attributes["space"] = value; }
+            get => GetAttribute<XmlSpaceHandling>("space", true, XmlSpaceHandling.inherit);
+            set => Attributes["space"] = value;
         }
 
-        public void SetAndForceUniqueID(string value, bool autoForceUniqueID = true, Action<SvgElement, string, string> logElementOldIDNewID = null)
+        public void SetAndForceUniqueID(
+          string value,
+          bool autoForceUniqueID = true,
+          Action<SvgElement, string, string> logElementOldIDNewID = null)
         {
-            // Don't do anything if it hasn't changed
             if (string.Compare(ID, value) == 0)
             {
                 return;
@@ -386,340 +365,264 @@ namespace Svg
             }
 
             Attributes["id"] = value;
-
-            if (OwnerDocument != null)
+            if (OwnerDocument == null)
             {
-                OwnerDocument.IdManager.AddAndForceUniqueID(this, null, autoForceUniqueID, logElementOldIDNewID);
+                return;
             }
+
+            OwnerDocument.IdManager.AddAndForceUniqueID(this, null, autoForceUniqueID, logElementOldIDNewID);
         }
 
-        /// <summary>
-        /// Only used by the ID Manager
-        /// </summary>
-        /// <param name="newID"></param>
         internal void ForceUniqueID(string newID)
         {
             Attributes["id"] = newID;
         }
 
-        /// <summary>
-        /// Called by the underlying <see cref="SvgElement"/> when an element has been added to the
-        /// <see cref="Children"/> collection.
-        /// </summary>
-        /// <param name="child">The <see cref="SvgElement"/> that has been added.</param>
-        /// <param name="index">An <see cref="int"/> representing the index where the element was added to the collection.</param>
         protected virtual void AddElement(SvgElement child, int index)
         {
         }
 
-        /// <summary>
-        /// Fired when an Element was added to the children of this Element
-        /// </summary>
         public event EventHandler<ChildAddedEventArgs> ChildAdded;
 
-        /// <summary>
-        /// Calls the <see cref="AddElement"/> method with the specified parameters.
-        /// </summary>
-        /// <param name="child">The <see cref="SvgElement"/> that has been added.</param>
-        /// <param name="index">An <see cref="int"/> representing the index where the element was added to the collection.</param>
         internal void OnElementAdded(SvgElement child, int index)
         {
-            this.AddElement(child, index);
-            SvgElement sibling = null;
-            if (index < (Children.Count - 1))
+            AddElement(child, index);
+            SvgElement svgElement = null;
+            if (index < Children.Count - 1)
             {
-                sibling = Children[index + 1];
+                svgElement = Children[index + 1];
             }
-            var handler = ChildAdded;
-            if (handler != null)
+
+            EventHandler<ChildAddedEventArgs> childAdded = ChildAdded;
+            if (childAdded == null)
             {
-                handler(this, new ChildAddedEventArgs { NewChild = child, BeforeSibling = sibling });
+                return;
             }
+
+            childAdded(this, new ChildAddedEventArgs()
+            {
+                NewChild = child,
+                BeforeSibling = svgElement
+            });
         }
 
-        /// <summary>
-        /// Called by the underlying <see cref="SvgElement"/> when an element has been removed from the
-        /// <see cref="Children"/> collection.
-        /// </summary>
-        /// <param name="child">The <see cref="SvgElement"/> that has been removed.</param>
         protected virtual void RemoveElement(SvgElement child)
         {
         }
 
-        /// <summary>
-        /// Calls the <see cref="RemoveElement"/> method with the specified <see cref="SvgElement"/> as the parameter.
-        /// </summary>
-        /// <param name="child">The <see cref="SvgElement"/> that has been removed.</param>
         internal void OnElementRemoved(SvgElement child)
         {
-            this.RemoveElement(child);
+            RemoveElement(child);
         }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SvgElement"/> class.
-        /// </summary>
         public SvgElement()
         {
-            this._children = new SvgElementCollection(this);
-            this._eventHandlers = new EventHandlerList();
-            this._elementName = string.Empty;
-            this._customAttributes = new SvgCustomAttributeCollection(this);
-
-            //subscribe to attribute events
-            Attributes.AttributeChanged += Attributes_AttributeChanged;
-            CustomAttributes.AttributeChanged += Attributes_AttributeChanged;
-#if !USE_SOURCE_GENERATORS
-            //find svg attribute descriptions
-            _svgPropertyAttributes = from PropertyDescriptor a in TypeDescriptor.GetProperties(this)
-                                     let attribute = a.Attributes[typeof(SvgAttributeAttribute)] as SvgAttributeAttribute
-                                     where attribute != null
-                                     select new PropertyAttributeTuple { Property = a, Attribute = attribute };
-
-            _svgEventAttributes = from EventDescriptor a in TypeDescriptor.GetEvents(this)
-                                  let attribute = a.Attributes[typeof(SvgAttributeAttribute)] as SvgAttributeAttribute
-                                  where attribute != null
-                                  select new EventAttributeTuple { Event = a.ComponentType.GetField(a.Name, BindingFlags.Instance | BindingFlags.NonPublic), Attribute = attribute };
-#endif
+            _children = new SvgElementCollection(this);
+            _eventHandlers = new EventHandlerList();
+            _elementName = string.Empty;
+            _customAttributes = new SvgCustomAttributeCollection(this);
+            Attributes.AttributeChanged += new EventHandler<AttributeEventArgs>(Attributes_AttributeChanged);
+            CustomAttributes.AttributeChanged += new EventHandler<AttributeEventArgs>(Attributes_AttributeChanged);
+            _svgPropertyAttributes = TypeDescriptor.GetProperties(this).Cast<PropertyDescriptor>().Select(a => new
+            {
+                a = a,
+                attribute = a.Attributes[typeof(SvgAttributeAttribute)] as SvgAttributeAttribute
+            }).Where(_param1 => _param1.attribute != null).Select(_param1 => new SvgElement.PropertyAttributeTuple()
+            {
+                Property = _param1.a,
+                Attribute = _param1.attribute
+            });
+            _svgEventAttributes = TypeDescriptor.GetEvents(this).Cast<EventDescriptor>().Select(a => new
+            {
+                a = a,
+                attribute = a.Attributes[typeof(SvgAttributeAttribute)] as SvgAttributeAttribute
+            }).Where(_param1 => _param1.attribute != null).Select(_param1 => new SvgElement.EventAttributeTuple()
+            {
+                Event = _param1.a.ComponentType.GetField(_param1.a.Name, (BindingFlags)36),
+                Attribute = _param1.attribute
+            });
         }
 
-        //dispatch attribute event
-        void Attributes_AttributeChanged(object sender, AttributeEventArgs e)
+        private void Attributes_AttributeChanged(object sender, AttributeEventArgs e)
         {
             OnAttributeChanged(e);
         }
 
-        public virtual void InitialiseFromXML(XmlReader reader, SvgDocument document)
+        public virtual void InitialiseFromXML(XmlTextReader reader, SvgDocument document)
         {
             throw new NotImplementedException();
         }
 
-        /// <summary>Derrived classes may decide that the element should not be written. For example, the text element shouldn't be written if it's empty.</summary>
+        public void RenderElement(ISvgRenderer renderer)
+        {
+            Render(renderer);
+        }
+
         public virtual bool ShouldWriteElement()
         {
-            //Write any element who has a name.
-            return !string.IsNullOrEmpty(this.ElementName);
+            return ElementName != string.Empty;
         }
 
-        protected virtual void WriteStartElement(XmlWriter writer)
+        protected virtual void WriteStartElement(XmlTextWriter writer)
         {
-            if (!string.IsNullOrEmpty(this.ElementName))
+            if (ElementName != string.Empty)
             {
-                if (string.IsNullOrEmpty(this.ElementNamespace))
-                    writer.WriteStartElement(this.ElementName);
-                else
-                {
-                    var prefix = writer.LookupPrefix(this.ElementNamespace);
-                    if (prefix == null)
-                        writer.WriteStartElement(this.ElementName, this.ElementNamespace);
-                    else
-                        writer.WriteStartElement(prefix, this.ElementName, this.ElementNamespace);
-                }
+                writer.WriteStartElement(ElementName);
             }
 
-            this.WriteAttributes(writer);
+            WriteAttributes(writer);
         }
 
-        protected virtual void WriteEndElement(XmlWriter writer)
+        protected virtual void WriteEndElement(XmlTextWriter writer)
         {
-            if (!string.IsNullOrEmpty(this.ElementName))
+            if (!(ElementName != string.Empty))
             {
-                writer.WriteEndElement();
+                return;
             }
+            writer.WriteEndElement();
         }
 
-        protected virtual void WriteAttributes(XmlWriter writer)
+        protected virtual void WriteAttributes(XmlTextWriter writer)
         {
-            // namespaces
-            foreach (var ns in Namespaces)
-            {
-                if (ns.Value.Equals(SvgNamespaces.SvgNamespace) && !string.IsNullOrEmpty(ns.Key))
-                    continue;
-                writer.WriteAttributeString("xmlns", ns.Key, null, ns.Value);
-            }
-
-            // properties
-            var styles = WritePropertyAttributes(writer);
-
-            // events
+            Dictionary<string, string> source = WritePropertyAttributes(writer);
             if (AutoPublishEvents)
             {
-#if USE_SOURCE_GENERATORS
-                foreach (var property in this.GetProperties().Where(x => x.DescriptorType == DescriptorType.Event))
+                foreach (SvgElement.EventAttributeTuple svgEventAttribute in _svgEventAttributes)
                 {
-                    var evt = property.GetValue(this);
-
-                    // if someone has registered publish the attribute
-                    if (evt != null && !string.IsNullOrEmpty(this.ID))
+                    if (svgEventAttribute.Event.GetValue(this) != null && !string.IsNullOrEmpty(ID))
                     {
-                        string evtValue = this.ID + "/" + property.AttributeName;
-                        WriteAttributeString(writer, property.AttributeName, null, evtValue);
+                        writer.WriteAttributeString(svgEventAttribute.Attribute.Name, ID + "/" + svgEventAttribute.Attribute.Name);
                     }
                 }
-#else
-                foreach (var attr in _svgEventAttributes)
-                {
-                    var evt = attr.Event.GetValue(this);
-
-                    // if someone has registered publish the attribute
-                    if (evt != null && !string.IsNullOrEmpty(this.ID))
-                    {
-                        string evtValue = this.ID + "/" + attr.Attribute.Name;
-                        WriteAttributeString(writer, attr.Attribute.Name, null, evtValue);
-                    }
-                }
-#endif
             }
-
-            // add the custom attributes
-            var additionalStyleValue = string.Empty;
-            foreach (var item in this._customAttributes)
+            var empty = string.Empty;
+            foreach (KeyValuePair<string, string> customAttribute in (Dictionary<string, string>)_customAttributes)
             {
-                if (item.Key.Equals("style") && styles.Any())
+                if (customAttribute.Key.Equals("style") && source.Any<KeyValuePair<string, string>>())
                 {
-                    additionalStyleValue = item.Value;
-                    continue;
-                }
-                var index = item.Key.LastIndexOf(":");
-                if (index >= 0)
-                {
-                    var ns = item.Key.Substring(0, index);
-                    var localName = item.Key.Substring(index + 1);
-                    WriteAttributeString(writer, localName, ns, item.Value);
+                    empty = customAttribute.Value;
                 }
                 else
-                    WriteAttributeString(writer, item.Key, null, item.Value);
+                {
+                    writer.WriteAttributeString(customAttribute.Key, customAttribute.Value);
+                }
             }
-
-            // write the style property
-            if (styles.Any())
+            if (!source.Any<KeyValuePair<string, string>>())
             {
-                var styleValues = styles.Select(s => s.Key + ":" + s.Value)
-                    .Concat(Enumerable.Repeat(additionalStyleValue, 1));
-                WriteAttributeString(writer, "style", null, string.Join(";", styleValues));
+                return;
             }
+            writer.WriteAttributeString("style", source.Select<KeyValuePair<string, string>, string>(s =>
+            {
+                KeyValuePair<string, string> keyValuePair = s;
+                var key = keyValuePair.Key;
+                keyValuePair = s;
+                var str = keyValuePair.Value;
+                return key + ":" + str + ";";
+            }).Aggregate<string>((p, c) => p + c) + empty);
         }
 
-        private Dictionary<string, string> WritePropertyAttributes(XmlWriter writer)
+        private Dictionary<string, string> WritePropertyAttributes(XmlTextWriter writer)
         {
-            var styles = _styles.ToDictionary(_styles => _styles.Key, _styles => _styles.Value.Last().Value);
-
-#if USE_SOURCE_GENERATORS
-            var opacityAttributes = new List<ISvgPropertyDescriptor>();
-            var opacityValues = new Dictionary<string, float>();
-
+            Dictionary<string, string> dictionary1 = _styles.ToDictionary<KeyValuePair<string, SortedDictionary<int, string>>, string, string>(_styles => _styles.Key, _styles => _styles.Value.Last<KeyValuePair<int, string>>().Value);
+            List<SvgElement.PropertyAttributeTuple> propertyAttributeTupleList = new List<SvgElement.PropertyAttributeTuple>();
+            Dictionary<string, float> dictionary2 = new Dictionary<string, float>();
             try
             {
                 Writing = true;
-
-                foreach (var property in this.GetProperties())
+                foreach (SvgElement.PropertyAttributeTuple propertyAttribute in _svgPropertyAttributes)
                 {
-                    if (property.Converter == null)
+                    if (propertyAttribute.Property.Converter.CanConvertTo(typeof(string)))
                     {
-                        continue;
-                    }
-                    if (property.Converter.CanConvertTo(typeof(string)))
-                    {
-                        if (property.AttributeName == "fill-opacity" || property.AttributeName == "stroke-opacity")
+                        if (propertyAttribute.Attribute.Name == "fill-opacity" || propertyAttribute.Attribute.Name == "stroke-opacity")
                         {
-                            opacityAttributes.Add(property);
-                            continue;
+                            propertyAttributeTupleList.Add(propertyAttribute);
                         }
-
-                        if (Attributes.ContainsKey(property.AttributeName))
+                        else if (Attributes.ContainsKey(propertyAttribute.Attribute.Name))
                         {
-                            var propertyValue = property.GetValue(this);
-
-                            var forceWrite = false;
-                            var writeStyle = property.AttributeName == "fill" || property.AttributeName == "stroke";
-
+                            var obj = propertyAttribute.Property.GetValue(this);
+                            var flag1 = false;
+                            var flag2 = propertyAttribute.Attribute.Name == "fill" || propertyAttribute.Attribute.Name == "stroke";
                             if (Parent != null)
                             {
-                                if (writeStyle && propertyValue == SvgPaintServer.NotSet)
-                                    continue;
-
-                                object parentValue;
-                                if (TryResolveParentAttributeValue(property.AttributeName, out parentValue))
+                                if (!flag2 || obj != SvgPaintServer.NotSet)
                                 {
-                                    if ((parentValue == propertyValue)
-                                        || ((parentValue != null) && parentValue.Equals(propertyValue)))
+                                    if (TryResolveParentAttributeValue(propertyAttribute.Attribute.Name, out var parentAttributeValue))
                                     {
-                                        if (writeStyle)
-                                            continue;
+                                        if (parentAttributeValue == obj || parentAttributeValue != null && parentAttributeValue.Equals(obj))
+                                        {
+                                            if (flag2)
+                                            {
+                                                continue;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            flag1 = true;
+                                        }
                                     }
-                                    else
-                                        forceWrite = true;
-                                }
-                            }
-
-                            var hasOpacity = writeStyle;
-                            if (hasOpacity)
-                            {
-                                if (propertyValue is SvgColourServer && ((SvgColourServer)propertyValue).Colour.A < 255)
-                                {
-                                    var opacity = ((SvgColourServer)propertyValue).Colour.A / 255f;
-                                    opacityValues.Add(property.AttributeName + "-opacity", opacity);
-                                }
-                            }
-
-#if NETFULL
-                            var value = (string)property.Converter.ConvertTo(propertyValue, typeof(string));
-#else
-                            // dotnetcore throws exception if input is null
-                            var value = propertyValue == null ? null : (string)property.Converter.ConvertTo(propertyValue, typeof(string));
-#endif
-
-                            if (propertyValue != null)
-                            {
-                                //Only write the attribute's value if it is not the default value, not null/empty, or we're forcing the write.
-                                if (forceWrite || !string.IsNullOrEmpty(value))
-                                {
-                                    if (writeStyle)
-                                    {
-                                        styles[property.AttributeName] = value;
-                                    }
-                                    else
-                                    {
-                                        WriteAttributeString(writer, property.AttributeName, property.AttributeNamespace, value);
-                                    }
-                                }
-                            }
-                            else if (property.AttributeName == "fill") //if fill equals null, write 'none'
-                            {
-                                if (writeStyle)
-                                {
-                                    styles[property.AttributeName] = value;
                                 }
                                 else
                                 {
-                                    WriteAttributeString(writer, property.AttributeName, property.AttributeNamespace, value);
+                                    continue;
+                                }
+                            }
+                            if (flag2 && obj is SvgColourServer && ((SvgColourServer)obj).Colour.A < byte.MaxValue)
+                            {
+                                var num = ((SvgColourServer)obj).Colour.A / (float)byte.MaxValue;
+                                dictionary2.Add(propertyAttribute.Attribute.Name + "-opacity", num);
+                            }
+                            var str = obj == null ? null : (string)propertyAttribute.Property.Converter.ConvertTo(obj, typeof(string));
+                            if (obj != null)
+                            {
+                                if (flag1 || !string.IsNullOrEmpty(str))
+                                {
+                                    if (flag2)
+                                    {
+                                        dictionary1[propertyAttribute.Attribute.Name] = str;
+                                    }
+                                    else
+                                    {
+                                        writer.WriteAttributeString(propertyAttribute.Attribute.NamespaceAndName, str);
+                                    }
+                                }
+                            }
+                            else if (propertyAttribute.Attribute.Name == "fill")
+                            {
+                                if (flag2)
+                                {
+                                    dictionary1[propertyAttribute.Attribute.Name] = str;
+                                }
+                                else
+                                {
+                                    writer.WriteAttributeString(propertyAttribute.Attribute.NamespaceAndName, str);
                                 }
                             }
                         }
                     }
                 }
-
-                foreach (var property in opacityAttributes)
+                foreach (SvgElement.PropertyAttributeTuple propertyAttributeTuple in propertyAttributeTupleList)
                 {
-                    var opacity = 1f;
-                    var write = false;
-
-                    var key = property.AttributeName;
-                    if (opacityValues.ContainsKey(key))
+                    var num1 = 1f;
+                    var flag = false;
+                    var name = propertyAttributeTuple.Attribute.Name;
+                    if (dictionary2.ContainsKey(name))
                     {
-                        opacity = opacityValues[key];
-                        write = true;
+                        num1 = dictionary2[name];
+                        flag = true;
                     }
-                    if (Attributes.ContainsKey(key))
+                    if (Attributes.ContainsKey(name))
                     {
-                        opacity *= (float)property.GetValue(this);
-                        write = true;
+                        num1 *= (float)propertyAttributeTuple.Property.GetValue(this);
+                        flag = true;
                     }
-                    if (write)
+                    if (flag)
                     {
-                        opacity = (float)Math.Round(opacity, 2, MidpointRounding.AwayFromZero);
-                        var value = (string)property.Converter.ConvertTo(opacity, typeof(string));
-                        if (!string.IsNullOrEmpty(value))
-                            WriteAttributeString(writer, property.AttributeName, property.AttributeNamespace, value);
+                        var num2 = (float)Math.Round((double)num1, 2, (MidpointRounding)1);
+                        var str = (string)propertyAttributeTuple.Property.Converter.ConvertTo(num2, typeof(string));
+                        if (!string.IsNullOrEmpty(str))
+                        {
+                            writer.WriteAttributeString(propertyAttributeTuple.Attribute.NamespaceAndName, str);
+                        }
                     }
                 }
             }
@@ -727,232 +630,189 @@ namespace Svg
             {
                 Writing = false;
             }
-#else
-            var opacityAttributes = new List<PropertyAttributeTuple>();
-            var opacityValues = new Dictionary<string, float>();
-
-            try
-            {
-                Writing = true;
-
-                foreach (var attr in _svgPropertyAttributes)
-                {
-                    if (attr.Property.Converter.CanConvertTo(typeof(string)))
-                    {
-                        if (attr.Attribute.Name == "fill-opacity" || attr.Attribute.Name == "stroke-opacity")
-                        {
-                            opacityAttributes.Add(attr);
-                            continue;
-                        }
-
-                        if (Attributes.ContainsKey(attr.Attribute.Name))
-                        {
-                            var propertyValue = attr.Property.GetValue(this);
-
-                            var forceWrite = false;
-                            var writeStyle = attr.Attribute.Name == "fill" || attr.Attribute.Name == "stroke";
-
-                            if (Parent != null)
-                            {
-                                if (writeStyle && propertyValue == SvgPaintServer.NotSet)
-                                    continue;
-
-                                object parentValue;
-                                if (TryResolveParentAttributeValue(attr.Attribute.Name, out parentValue))
-                                {
-                                    if ((parentValue == propertyValue)
-                                        || ((parentValue != null) && parentValue.Equals(propertyValue)))
-                                    {
-                                        if (writeStyle)
-                                            continue;
-                                    }
-                                    else
-                                        forceWrite = true;
-                                }
-                            }
-
-                            var hasOpacity = writeStyle;
-                            if (hasOpacity)
-                            {
-                                if (propertyValue is SvgColourServer && ((SvgColourServer)propertyValue).Colour.A < 255)
-                                {
-                                    var opacity = ((SvgColourServer)propertyValue).Colour.A / 255f;
-                                    opacityValues.Add(attr.Attribute.Name + "-opacity", opacity);
-                                }
-                            }
-
-#if NETFULL
-                            var value = (string)attr.Property.Converter.ConvertTo(propertyValue, typeof(string));
-#else
-                            // dotnetcore throws exception if input is null
-                            var value = propertyValue == null ? null : (string)attr.Property.Converter.ConvertTo(propertyValue, typeof(string));
-#endif
-
-                            if (propertyValue != null)
-                            {
-                                //Only write the attribute's value if it is not the default value, not null/empty, or we're forcing the write.
-                                if (forceWrite || !string.IsNullOrEmpty(value))
-                                {
-                                    if (writeStyle)
-                                    {
-                                        styles[attr.Attribute.Name] = value;
-                                    }
-                                    else
-                                    {
-                                        WriteAttributeString(writer, attr.Attribute.Name, attr.Attribute.NameSpace, value);
-                                    }
-                                }
-                            }
-                            else if (attr.Attribute.Name == "fill") //if fill equals null, write 'none'
-                            {
-                                if (writeStyle)
-                                {
-                                    styles[attr.Attribute.Name] = value;
-                                }
-                                else
-                                {
-                                    WriteAttributeString(writer, attr.Attribute.Name, attr.Attribute.NameSpace, value);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                foreach (var attr in opacityAttributes)
-                {
-                    var opacity = 1f;
-                    var write = false;
-
-                    var key = attr.Attribute.Name;
-                    if (opacityValues.ContainsKey(key))
-                    {
-                        opacity = opacityValues[key];
-                        write = true;
-                    }
-                    if (Attributes.ContainsKey(key))
-                    {
-                        opacity *= (float)attr.Property.GetValue(this);
-                        write = true;
-                    }
-                    if (write)
-                    {
-                        opacity = (float)Math.Round(opacity, 2, MidpointRounding.AwayFromZero);
-                        var value = (string)attr.Property.Converter.ConvertTo(opacity, typeof(string));
-                        if (!string.IsNullOrEmpty(value))
-                            WriteAttributeString(writer, attr.Attribute.Name, attr.Attribute.NameSpace, value);
-                    }
-                }
-            }
-            finally
-            {
-                Writing = false;
-            }
-#endif
-            return styles;
+            return dictionary1;
         }
 
-        private void WriteAttributeString(XmlWriter writer, string name, string ns, string value)
-        {
-            if (string.IsNullOrEmpty(ns))
-                writer.WriteAttributeString(name, value);
-            else
-            {
-                var prefix = writer.LookupPrefix(ns);
-                if (prefix != null)
-                    ns = null;
-                writer.WriteAttributeString(prefix, name, ns, value);
-            }
-        }
-
-        public bool AutoPublishEvents = true;
-
-        private bool TryResolveParentAttributeValue(string attributeKey, out object parentAttributeValue)
+        private bool TryResolveParentAttributeValue(
+          string attributeKey,
+          out object parentAttributeValue)
         {
             parentAttributeValue = null;
-
-            //attributeKey = char.ToUpper(attributeKey[0]) + attributeKey.Substring(1);
-
-            var currentParent = Parent;
-            var resolved = false;
-            while (currentParent != null)
+            SvgElement parent = Parent;
+            var flag = false;
+            for (; parent != null; parent = parent.Parent)
             {
-                if (currentParent.Attributes.ContainsKey(attributeKey))
+                if (parent.Attributes.ContainsKey(attributeKey))
                 {
-                    resolved = true;
-                    parentAttributeValue = currentParent.Attributes[attributeKey];
+                    flag = true;
+                    parentAttributeValue = parent.Attributes[attributeKey];
                     if (parentAttributeValue != null)
+                    {
                         break;
+                    }
                 }
-                currentParent = currentParent.Parent;
             }
-
-            return resolved;
+            return flag;
         }
 
-        /// <summary>
-        /// Write this SvgElement out using a given XmlWriter.
-        /// </summary>
-        /// <param name="writer">The XmlWriter to use.</param>
-        /// <remarks>
-        /// Recommendation is to create an XmlWriter by calling a factory method,<br/>
-        /// e.g. <see cref="XmlWriter.Create(System.IO.Stream)"/>,
-        /// as per <a href="https://docs.microsoft.com/dotnet/api/system.xml.xmltextwriter#remarks">Microsoft documentation</a>.<br/>
-        /// <br/>
-        /// However, unlike an <see cref="XmlTextWriter"/> created via 'new XmlTextWriter()',<br/>
-        /// a factory-constructed XmlWriter will not flush output until it is closed<br/>
-        /// (normally via a using statement), or unless the client explicitly calls <see cref="XmlWriter.Flush()"/>.
-        /// </remarks>
-        public virtual void Write(XmlWriter writer)
+        public virtual void Write(XmlTextWriter writer)
         {
-            if (ShouldWriteElement())
+            if (!ShouldWriteElement())
             {
-                this.WriteStartElement(writer);
-                this.WriteChildren(writer);
-                this.WriteEndElement(writer);
+                return;
             }
+
+            WriteStartElement(writer);
+            WriteChildren(writer);
+            WriteEndElement(writer);
         }
 
-        protected virtual void WriteChildren(XmlWriter writer)
+        protected virtual void WriteChildren(XmlTextWriter writer)
         {
-            if (this.Nodes.Any())
+            if (Nodes.Any<ISvgNode>())
             {
-                SvgContentNode content;
-                foreach (var node in this.Nodes)
+                foreach (ISvgNode node in (IEnumerable<ISvgNode>)Nodes)
                 {
-                    content = node as SvgContentNode;
-                    if (content == null)
+                    if (!(node is SvgContentNode svgContentNode))
                     {
                         ((SvgElement)node).Write(writer);
                     }
-                    else if (!string.IsNullOrEmpty(content.Content))
+                    else if (!string.IsNullOrEmpty(svgContentNode.Content))
                     {
-                        writer.WriteString(content.Content);
+                        writer.WriteString(svgContentNode.Content);
                     }
                 }
             }
             else
             {
-                //write the content
-                if (!String.IsNullOrEmpty(this.Content))
-                    writer.WriteString(this.Content);
+                if (!string.IsNullOrEmpty(Content))
+                {
+                    writer.WriteString(Content);
+                }
 
-                //write all children
-                foreach (SvgElement child in this.Children)
+                foreach (SvgElement child in Children)
                 {
                     child.Write(writer);
                 }
             }
         }
 
-        /// <summary>
-        /// Creates a new object that is a copy of the current instance.
-        /// </summary>
-        /// <returns>
-        /// A new object that is a copy of this instance.
-        /// </returns>
+        protected virtual void Render(ISvgRenderer renderer)
+        {
+            try
+            {
+                PushTransforms(renderer);
+                RenderChildren(renderer);
+            }
+            finally
+            {
+                PopTransforms(renderer);
+            }
+        }
+
+        protected virtual void RenderChildren(ISvgRenderer renderer)
+        {
+            foreach (SvgElement child in Children)
+            {
+                child.Render(renderer);
+            }
+        }
+
+        void ISvgElement.Render(ISvgRenderer renderer)
+        {
+            Render(renderer);
+        }
+
+        protected void AddPaths(SvgElement elem, GraphicsPath path)
+        {
+            foreach (SvgElement child in elem.Children)
+            {
+                if (!(child is SvgSymbol))
+                {
+                    if (child is SvgVisualElement && !(child is SvgGroup))
+                    {
+                        GraphicsPath graphicsPath1 = ((SvgVisualElement)child).Path(null);
+                        if (graphicsPath1 != null)
+                        {
+                            GraphicsPath graphicsPath2;
+                            using (graphicsPath2 = (GraphicsPath)graphicsPath1.Clone())
+                            {
+                                if (child.Transforms != null)
+                                {
+                                    using (Matrix matrix = child.Transforms.GetMatrix())
+                                    {
+                                        graphicsPath2.Transform(matrix);
+                                    }
+                                }
+                                if (graphicsPath2.PointCount > 0)
+                                {
+                                    path.AddPath(graphicsPath2, false);
+                                }
+                            }
+                        }
+                    }
+                    if (!(child is SvgPaintServer))
+                    {
+                        AddPaths(child, path);
+                    }
+                }
+            }
+        }
+
+        protected GraphicsPath GetPaths(SvgElement elem, ISvgRenderer renderer)
+        {
+            GraphicsPath paths1 = new GraphicsPath();
+            foreach (SvgElement child in elem.Children)
+            {
+                if (child is SvgVisualElement)
+                {
+                    if (child is SvgGroup)
+                    {
+                        GraphicsPath paths2 = GetPaths(child, renderer);
+                        if (paths2.PointCount > 0)
+                        {
+                            if (child.Transforms != null)
+                            {
+                                using (Matrix matrix = child.Transforms.GetMatrix())
+                                {
+                                    paths2.Transform(matrix);
+                                }
+                            }
+                            paths1.AddPath(paths2, false);
+                        }
+                    }
+                    else
+                    {
+                        GraphicsPath graphicsPath1 = ((SvgVisualElement)child).Path(renderer);
+                        GraphicsPath graphicsPath2 = graphicsPath1 != null ? (GraphicsPath)graphicsPath1.Clone() : new GraphicsPath();
+                        if (child.Children.Count > 0)
+                        {
+                            GraphicsPath paths3 = GetPaths(child, renderer);
+                            if (paths3.PointCount > 0)
+                            {
+                                graphicsPath2.AddPath(paths3, false);
+                            }
+                        }
+                        if (graphicsPath2.PointCount > 0)
+                        {
+                            if (child.Transforms != null)
+                            {
+                                using (Matrix matrix = child.Transforms.GetMatrix())
+                                {
+                                    graphicsPath2.Transform(matrix);
+                                }
+                            }
+                            paths1.AddPath(graphicsPath2, false);
+                        }
+                    }
+                }
+            }
+            return paths1;
+        }
+
         public virtual object Clone()
         {
-            return DeepCopy();
+            return MemberwiseClone();
         }
 
         public abstract SvgElement DeepCopy();
@@ -964,171 +824,102 @@ namespace Svg
 
         public virtual SvgElement DeepCopy<T>() where T : SvgElement, new()
         {
-            var newObj = new T
+            T obj = new T
             {
+                ID = ID,
                 Content = Content,
                 ElementName = ElementName
             };
-
-            //if (this.Parent != null)
-            //    this.Parent.Children.Add(newObj);
-
-            foreach (var attribute in Attributes)
+            if (Transforms != null)
             {
-                var value = attribute.Value is ICloneable ? ((ICloneable)attribute.Value).Clone() : attribute.Value;
-                newObj.Attributes.Add(attribute.Key, value);
+                obj.Transforms = Transforms.Clone() as SvgTransformCollection;
             }
 
-            foreach (var child in Children)
-                newObj.Children.Add(child.DeepCopy());
-
-#if USE_SOURCE_GENERATORS
-            foreach (var property in this.GetProperties().Where(x => x.DescriptorType == DescriptorType.Event))
+            foreach (SvgElement child in Children)
             {
-                var evt = property.GetValue(this);
+                obj.Children.Add(child.DeepCopy());
+            }
 
-                // if someone has registered also register here
-                if (evt != null)
+            foreach (SvgElement.EventAttributeTuple svgEventAttribute in _svgEventAttributes)
+            {
+                if (svgEventAttribute.Event.GetValue(this) != null)
                 {
-                    if (property.AttributeName == "MouseDown")
-                        newObj.MouseDown += delegate { };
-                    else if (property.AttributeName == "MouseUp")
-                        newObj.MouseUp += delegate { };
-                    else if (property.AttributeName == "MouseOver")
-                        newObj.MouseOver += delegate { };
-                    else if (property.AttributeName == "MouseOut")
-                        newObj.MouseOut += delegate { };
-                    else if (property.AttributeName == "MouseMove")
-                        newObj.MouseMove += delegate { };
-                    else if (property.AttributeName == "MouseScroll")
-                        newObj.MouseScroll += delegate { };
-                    else if (property.AttributeName == "Click")
-                        newObj.Click += delegate { };
-                    else if (property.AttributeName == "Change") // text element
-                        (newObj as SvgText).Change += delegate { };
+                    if (svgEventAttribute.Event.Name == "MouseDown")
+                    {
+                        obj.MouseDown += (_param1, _param2) => { };
+                    }
+                    else if (svgEventAttribute.Event.Name == "MouseUp")
+                    {
+                        obj.MouseUp += (_param1, _param2) => { };
+                    }
+                    else if (svgEventAttribute.Event.Name == "MouseOver")
+                    {
+                        obj.MouseOver += (_param1, _param2) => { };
+                    }
+                    else if (svgEventAttribute.Event.Name == "MouseOut")
+                    {
+                        obj.MouseOut += (_param1, _param2) => { };
+                    }
+                    else if (svgEventAttribute.Event.Name == "MouseMove")
+                    {
+                        obj.MouseMove += (_param1, _param2) => { };
+                    }
+                    else if (svgEventAttribute.Event.Name == "MouseScroll")
+                    {
+                        obj.MouseScroll += (_param1, _param2) => { };
+                    }
+                    else if (svgEventAttribute.Event.Name == "Click")
+                    {
+                        obj.Click += (_param1, _param2) => { };
+                    }
+                    else if (svgEventAttribute.Event.Name == "Change")
+                    {
+                        ((object)obj as SvgText).Change += (_param1, _param2) => { };
+                    }
                 }
             }
-#else
-            foreach (var attr in _svgEventAttributes)
+            if (_customAttributes.Count > 0)
             {
-                var evt = attr.Event.GetValue(this);
-
-                // if someone has registered also register here
-                if (evt != null)
+                foreach (KeyValuePair<string, string> customAttribute in (Dictionary<string, string>)_customAttributes)
                 {
-                    if (attr.Event.Name == "MouseDown")
-                        newObj.MouseDown += delegate { };
-                    else if (attr.Event.Name == "MouseUp")
-                        newObj.MouseUp += delegate { };
-                    else if (attr.Event.Name == "MouseOver")
-                        newObj.MouseOver += delegate { };
-                    else if (attr.Event.Name == "MouseOut")
-                        newObj.MouseOut += delegate { };
-                    else if (attr.Event.Name == "MouseMove")
-                        newObj.MouseMove += delegate { };
-                    else if (attr.Event.Name == "MouseScroll")
-                        newObj.MouseScroll += delegate { };
-                    else if (attr.Event.Name == "Click")
-                        newObj.Click += delegate { };
-                    else if (attr.Event.Name == "Change") // text element
-                        (newObj as SvgText).Change += delegate { };
+                    obj.CustomAttributes.Add(customAttribute.Key, customAttribute.Value);
                 }
             }
-#endif
-            foreach (var attribute in CustomAttributes)
-                newObj.CustomAttributes.Add(attribute.Key, attribute.Value);
-
-            foreach (var node in Nodes)
-                newObj.Nodes.Add(node.DeepCopy());
-
-            return newObj;
+            if (_nodes.Count > 0)
+            {
+                foreach (ISvgNode node in _nodes)
+                {
+                    obj.Nodes.Add(node.DeepCopy());
+                }
+            }
+            return obj;
         }
 
-        /// <summary>
-        /// Fired when an Atrribute of this Element has changed
-        /// </summary>
         public event EventHandler<AttributeEventArgs> AttributeChanged;
 
         protected void OnAttributeChanged(AttributeEventArgs args)
         {
-            var handler = AttributeChanged;
-            if (handler != null)
+            EventHandler<AttributeEventArgs> attributeChanged = AttributeChanged;
+            if (attributeChanged == null)
             {
-                handler(this, args);
+                return;
             }
+
+            attributeChanged(this, args);
         }
 
-        /// <summary>
-        /// Fired when an Atrribute of this Element has changed
-        /// </summary>
         public event EventHandler<ContentEventArgs> ContentChanged;
 
         protected void OnContentChanged(ContentEventArgs args)
         {
-            var handler = ContentChanged;
-            if (handler != null)
+            EventHandler<ContentEventArgs> contentChanged = ContentChanged;
+            if (contentChanged == null)
             {
-                handler(this, args);
+                return;
             }
+
+            contentChanged(this, args);
         }
-
-        #region graphical EVENTS
-
-        /*
-            onfocusin = "<anything>"
-            onfocusout = "<anything>"
-            onactivate = "<anything>"
-            onclick = "<anything>"
-            onmousedown = "<anything>"
-            onmouseup = "<anything>"
-            onmouseover = "<anything>"
-            onmousemove = "<anything>"
-            onmouseout = "<anything>"
-         */
-
-#if Net4
-        /// <summary>
-        /// Use this method to provide your implementation ISvgEventCaller which can register Actions
-        /// and call them if one of the events occurs. Make sure, that your SvgElement has a unique ID.
-        /// The SvgTextElement overwrites this and regsiters the Change event tor its text content.
-        /// </summary>
-        /// <param name="caller"></param>
-        public virtual void RegisterEvents(ISvgEventCaller caller)
-        {
-            if (caller != null && !string.IsNullOrEmpty(this.ID))
-            {
-                var rpcID = this.ID + "/";
-
-                caller.RegisterAction<float, float, int, int, bool, bool, bool, string>(rpcID + "onclick", CreateMouseEventAction(RaiseMouseClick));
-                caller.RegisterAction<float, float, int, int, bool, bool, bool, string>(rpcID + "onmousedown", CreateMouseEventAction(RaiseMouseDown));
-                caller.RegisterAction<float, float, int, int, bool, bool, bool, string>(rpcID + "onmouseup", CreateMouseEventAction(RaiseMouseUp));
-                caller.RegisterAction<float, float, int, int, bool, bool, bool, string>(rpcID + "onmousemove", CreateMouseEventAction(RaiseMouseMove));
-                caller.RegisterAction<float, float, int, int, bool, bool, bool, string>(rpcID + "onmouseover", CreateMouseEventAction(RaiseMouseOver));
-                caller.RegisterAction<float, float, int, int, bool, bool, bool, string>(rpcID + "onmouseout", CreateMouseEventAction(RaiseMouseOut));
-                caller.RegisterAction<int, bool, bool, bool, string>(rpcID + "onmousescroll", OnMouseScroll);
-            }
-        }
-
-        /// <summary>
-        /// Use this method to provide your implementation ISvgEventCaller to unregister Actions
-        /// </summary>
-        /// <param name="caller"></param>
-        public virtual void UnregisterEvents(ISvgEventCaller caller)
-        {
-            if (caller != null && !string.IsNullOrEmpty(this.ID))
-            {
-                var rpcID = this.ID + "/";
-
-                caller.UnregisterAction(rpcID + "onclick");
-                caller.UnregisterAction(rpcID + "onmousedown");
-                caller.UnregisterAction(rpcID + "onmouseup");
-                caller.UnregisterAction(rpcID + "onmousemove");
-                caller.UnregisterAction(rpcID + "onmousescroll");
-                caller.UnregisterAction(rpcID + "onmouseover");
-                caller.UnregisterAction(rpcID + "onmouseout");
-            }
-        }
-#endif
 
         [SvgAttribute("onclick")]
         public event EventHandler<MouseArg> Click;
@@ -1151,225 +942,515 @@ namespace Svg
         [SvgAttribute("onmouseout")]
         public event EventHandler<MouseArg> MouseOut;
 
-#if Net4
-        protected Action<float, float, int, int, bool, bool, bool, string> CreateMouseEventAction(Action<object, MouseArg> eventRaiser)
-        {
-            return (x, y, button, clickCount, altKey, shiftKey, ctrlKey, sessionID) =>
-                eventRaiser(this, new MouseArg { x = x, y = y, Button = button, ClickCount = clickCount, AltKey = altKey, ShiftKey = shiftKey, CtrlKey = ctrlKey, SessionID = sessionID });
-        }
-#endif
-
-        //click
         protected void RaiseMouseClick(object sender, MouseArg e)
         {
-            var handler = Click;
-            if (handler != null)
+            EventHandler<MouseArg> click = Click;
+            if (click == null)
             {
-                handler(sender, e);
+                return;
             }
+
+            click(sender, e);
         }
 
-        //down
         protected void RaiseMouseDown(object sender, MouseArg e)
         {
-            var handler = MouseDown;
-            if (handler != null)
+            EventHandler<MouseArg> mouseDown = MouseDown;
+            if (mouseDown == null)
             {
-                handler(sender, e);
+                return;
             }
+
+            mouseDown(sender, e);
         }
 
-        //up
         protected void RaiseMouseUp(object sender, MouseArg e)
         {
-            var handler = MouseUp;
-            if (handler != null)
+            EventHandler<MouseArg> mouseUp = MouseUp;
+            if (mouseUp == null)
             {
-                handler(sender, e);
+                return;
             }
+
+            mouseUp(sender, e);
         }
 
         protected void RaiseMouseMove(object sender, MouseArg e)
         {
-            var handler = MouseMove;
-            if (handler != null)
+            EventHandler<MouseArg> mouseMove = MouseMove;
+            if (mouseMove == null)
             {
-                handler(sender, e);
+                return;
             }
+
+            mouseMove(sender, e);
         }
 
-        //over
         protected void RaiseMouseOver(object sender, MouseArg args)
         {
-            var handler = MouseOver;
-            if (handler != null)
+            EventHandler<MouseArg> mouseOver = MouseOver;
+            if (mouseOver == null)
             {
-                handler(sender, args);
+                return;
             }
+
+            mouseOver(sender, args);
         }
 
-        //out
         protected void RaiseMouseOut(object sender, MouseArg args)
         {
-            var handler = MouseOut;
-            if (handler != null)
+            EventHandler<MouseArg> mouseOut = MouseOut;
+            if (mouseOut == null)
             {
-                handler(sender, args);
+                return;
             }
+
+            mouseOut(sender, args);
         }
 
-        //scroll
-        protected void OnMouseScroll(int scroll, bool ctrlKey, bool shiftKey, bool altKey, string sessionID)
+        protected void OnMouseScroll(
+          int scroll,
+          bool ctrlKey,
+          bool shiftKey,
+          bool altKey,
+          string sessionID)
         {
-            RaiseMouseScroll(this, new MouseScrollArg { Scroll = scroll, AltKey = altKey, ShiftKey = shiftKey, CtrlKey = ctrlKey, SessionID = sessionID });
+            MouseScrollArg e = new MouseScrollArg
+            {
+                Scroll = scroll,
+                AltKey = altKey,
+                ShiftKey = shiftKey,
+                CtrlKey = ctrlKey,
+                SessionID = sessionID
+            };
+            RaiseMouseScroll(this, e);
         }
 
         protected void RaiseMouseScroll(object sender, MouseScrollArg e)
         {
-            var handler = MouseScroll;
-            if (handler != null)
+            EventHandler<MouseScrollArg> mouseScroll = MouseScroll;
+            if (mouseScroll == null)
             {
-                handler(sender, e);
+                return;
+            }
+
+            mouseScroll(sender, e);
+        }
+
+        protected virtual bool IsPathDirty
+        {
+            get => _dirty;
+            set => _dirty = value;
+        }
+
+        public void InvalidateChildPaths()
+        {
+            IsPathDirty = true;
+            foreach (SvgElement child in Children)
+            {
+                child.InvalidateChildPaths();
             }
         }
 
-        #endregion graphical EVENTS
-    }
+        protected static float FixOpacityValue(float value)
+        {
+            return Math.Min(Math.Max(value, 0.0f), 1f);
+        }
 
-    public class SVGArg : EventArgs
-    {
-        public string SessionID;
-    }
+        [SvgAttribute("fill")]
+        public virtual SvgPaintServer Fill
+        {
+            get => GetAttribute<SvgPaintServer>("fill", true, SvgPaintServer.NotSet);
+            set => Attributes["fill"] = value;
+        }
 
-    /// <summary>
-    /// Describes the Attribute which was set
-    /// </summary>
-    public class AttributeEventArgs : SVGArg
-    {
-        public string Attribute;
-        public object Value;
-    }
+        [SvgAttribute("stroke")]
+        public virtual SvgPaintServer Stroke
+        {
+            get => GetAttribute<SvgPaintServer>("stroke", true);
+            set => Attributes["stroke"] = value;
+        }
 
-    /// <summary>
-    /// Content of this whas was set
-    /// </summary>
-    public class ContentEventArgs : SVGArg
-    {
-        public string Content;
-    }
+        [SvgAttribute("fill-rule")]
+        public virtual SvgFillRule FillRule
+        {
+            get => GetAttribute<SvgFillRule>("fill-rule", true);
+            set => Attributes["fill-rule"] = value;
+        }
 
-    /// <summary>
-    /// Describes the Attribute which was set
-    /// </summary>
-    public class ChildAddedEventArgs : SVGArg
-    {
-        public SvgElement NewChild;
-        public SvgElement BeforeSibling;
-    }
+        [SvgAttribute("fill-opacity")]
+        public virtual float FillOpacity
+        {
+            get => GetAttribute<float>("fill-opacity", true, 1f);
+            set => Attributes["fill-opacity"] = SvgElement.FixOpacityValue(value);
+        }
 
-#if Net4
-    //deriving class registers event actions and calls the actions if the event occurs
-    public interface ISvgEventCaller
-    {
-        void RegisterAction(string rpcID, Action action);
-        void RegisterAction<T1>(string rpcID, Action<T1> action);
-        void RegisterAction<T1, T2>(string rpcID, Action<T1, T2> action);
-        void RegisterAction<T1, T2, T3>(string rpcID, Action<T1, T2, T3> action);
-        void RegisterAction<T1, T2, T3, T4>(string rpcID, Action<T1, T2, T3, T4> action);
-        void RegisterAction<T1, T2, T3, T4, T5>(string rpcID, Action<T1, T2, T3, T4, T5> action);
-        void RegisterAction<T1, T2, T3, T4, T5, T6>(string rpcID, Action<T1, T2, T3, T4, T5, T6> action);
-        void RegisterAction<T1, T2, T3, T4, T5, T6, T7>(string rpcID, Action<T1, T2, T3, T4, T5, T6, T7> action);
-        void RegisterAction<T1, T2, T3, T4, T5, T6, T7, T8>(string rpcID, Action<T1, T2, T3, T4, T5, T6, T7, T8> action);
-        void UnregisterAction(string rpcID);
-    }
-#endif
+        [SvgAttribute("stroke-width")]
+        public virtual SvgUnit StrokeWidth
+        {
+            get => GetAttribute<SvgUnit>("stroke-width", true, (SvgUnit)1f);
+            set => Attributes["stroke-width"] = value;
+        }
 
-    /// <summary>
-    /// Represents the state of the mouse at the moment the event occured.
-    /// </summary>
-    public class MouseArg : SVGArg
-    {
-        public float x;
-        public float y;
+        [SvgAttribute("stroke-linecap")]
+        public virtual SvgStrokeLineCap StrokeLineCap
+        {
+            get => GetAttribute<SvgStrokeLineCap>("stroke-linecap", true, SvgStrokeLineCap.Butt);
+            set => Attributes["stroke-linecap"] = value;
+        }
 
-        /// <summary>
-        /// 1 = left, 2 = middle, 3 = right
-        /// </summary>
-        public int Button;
+        [SvgAttribute("stroke-linejoin")]
+        public virtual SvgStrokeLineJoin StrokeLineJoin
+        {
+            get => GetAttribute<SvgStrokeLineJoin>("stroke-linejoin", true, SvgStrokeLineJoin.Miter);
+            set => Attributes["stroke-linejoin"] = value;
+        }
 
-        /// <summary>
-        /// Amount of mouse clicks, e.g. 2 for double click
-        /// </summary>
-        public int ClickCount = -1;
+        [SvgAttribute("stroke-miterlimit")]
+        public virtual float StrokeMiterLimit
+        {
+            get => GetAttribute<float>("stroke-miterlimit", true, 4f);
+            set => Attributes["stroke-miterlimit"] = value;
+        }
 
-        /// <summary>
-        /// Alt modifier key pressed
-        /// </summary>
-        public bool AltKey;
+        [TypeConverter(typeof(SvgStrokeDashArrayConverter))]
+        [SvgAttribute("stroke-dasharray")]
+        public virtual SvgUnitCollection StrokeDashArray
+        {
+            get => GetAttribute<SvgUnitCollection>("stroke-dasharray", true);
+            set => Attributes["stroke-dasharray"] = value;
+        }
 
-        /// <summary>
-        /// Shift modifier key pressed
-        /// </summary>
-        public bool ShiftKey;
+        [SvgAttribute("stroke-dashoffset")]
+        public virtual SvgUnit StrokeDashOffset
+        {
+            get => GetAttribute<SvgUnit>("stroke-dashoffset", true, SvgUnit.Empty);
+            set => Attributes["stroke-dashoffset"] = value;
+        }
 
-        /// <summary>
-        /// Control modifier key pressed
-        /// </summary>
-        public bool CtrlKey;
-    }
+        [SvgAttribute("stroke-opacity")]
+        public virtual float StrokeOpacity
+        {
+            get => GetAttribute<float>("stroke-opacity", true, 1f);
+            set => Attributes["stroke-opacity"] = SvgElement.FixOpacityValue(value);
+        }
 
-    /// <summary>
-    /// Represents a string argument
-    /// </summary>
-    public class StringArg : SVGArg
-    {
-        public string s;
-    }
+        [SvgAttribute("opacity")]
+        public virtual float Opacity
+        {
+            get => GetAttribute<float>("opacity", true, 1f);
+            set => Attributes["opacity"] = SvgElement.FixOpacityValue(value);
+        }
 
-    public class MouseScrollArg : SVGArg
-    {
-        public int Scroll;
+        [SvgAttribute("shape-rendering")]
+        public virtual SvgShapeRendering ShapeRendering
+        {
+            get => GetAttribute<SvgShapeRendering>("shape-rendering", true);
+            set => Attributes["shape-rendering"] = value;
+        }
 
-        /// <summary>
-        /// Alt modifier key pressed
-        /// </summary>
-        public bool AltKey;
+        [SvgAttribute("text-anchor")]
+        public virtual SvgTextAnchor TextAnchor
+        {
+            get => GetAttribute<SvgTextAnchor>("text-anchor", true);
+            set
+            {
+                Attributes["text-anchor"] = value;
+                IsPathDirty = true;
+            }
+        }
 
-        /// <summary>
-        /// Shift modifier key pressed
-        /// </summary>
-        public bool ShiftKey;
+        [SvgAttribute("baseline-shift")]
+        public virtual string BaselineShift
+        {
+            get => GetAttribute<string>("baseline-shift", true);
+            set
+            {
+                Attributes["baseline-shift"] = value;
+                IsPathDirty = true;
+            }
+        }
 
-        /// <summary>
-        /// Control modifier key pressed
-        /// </summary>
-        public bool CtrlKey;
-    }
+        [SvgAttribute("font-family")]
+        public virtual string FontFamily
+        {
+            get => GetAttribute<string>("font-family", true);
+            set
+            {
+                Attributes["font-family"] = value;
+                IsPathDirty = true;
+            }
+        }
 
-    public interface ISvgNode
-    {
-        string Content { get; }
+        [SvgAttribute("font-size")]
+        public virtual SvgUnit FontSize
+        {
+            get => GetAttribute<SvgUnit>("font-size", true, SvgUnit.Empty);
+            set
+            {
+                Attributes["font-size"] = value;
+                IsPathDirty = true;
+            }
+        }
 
-        /// <summary>
-        /// Create a deep copy of this <see cref="ISvgNode"/>.
-        /// </summary>
-        /// <returns>A deep copy of this <see cref="ISvgNode"/></returns>
-        ISvgNode DeepCopy();
-    }
+        [SvgAttribute("font-style")]
+        public virtual SvgFontStyle FontStyle
+        {
+            get => GetAttribute<SvgFontStyle>("font-style", true, SvgFontStyle.All);
+            set
+            {
+                Attributes["font-style"] = value;
+                IsPathDirty = true;
+            }
+        }
 
-    /// <summary>This interface mostly indicates that a node is not to be drawn when rendering the SVG.</summary>
-    public interface ISvgDescriptiveElement
-    {
-    }
+        [SvgAttribute("font-variant")]
+        public virtual SvgFontVariant FontVariant
+        {
+            get => GetAttribute<SvgFontVariant>("font-variant", true, SvgFontVariant.Inherit);
+            set
+            {
+                Attributes["font-variant"] = value;
+                IsPathDirty = true;
+            }
+        }
 
-    internal interface ISvgElement
-    {
-        SvgElement Parent { get; }
-        SvgElementCollection Children { get; }
-        IList<ISvgNode> Nodes { get; }
+        [SvgAttribute("text-decoration")]
+        public virtual SvgTextDecoration TextDecoration
+        {
+            get => GetAttribute<SvgTextDecoration>("text-decoration", true);
+            set
+            {
+                Attributes["text-decoration"] = value;
+                IsPathDirty = true;
+            }
+        }
 
-#if !NO_SDC
-        void Render(ISvgRenderer renderer);
-#endif
+        [SvgAttribute("font-weight")]
+        public virtual SvgFontWeight FontWeight
+        {
+            get => GetAttribute<SvgFontWeight>("font-weight", true);
+            set
+            {
+                Attributes["font-weight"] = value;
+                IsPathDirty = true;
+            }
+        }
+
+        [SvgAttribute("text-transform")]
+        public virtual SvgTextTransformation TextTransformation
+        {
+            get => GetAttribute<SvgTextTransformation>("text-transform", true);
+            set
+            {
+                Attributes["text-transform"] = value;
+                IsPathDirty = true;
+            }
+        }
+
+        [SvgAttribute("font")]
+        public virtual string Font
+        {
+            get => GetAttribute<string>("font", true, string.Empty);
+            set
+            {
+                SvgElement.FontParseState fontParseState = SvgElement.FontParseState.fontStyle;
+                var strArray1 = value.Split(' ', StringSplitOptions.None);
+                for (var startIndex = 0; startIndex < strArray1.Length; ++startIndex)
+                {
+                    var str = strArray1[startIndex];
+                    var flag = false;
+                    while (!flag)
+                    {
+                        switch (fontParseState)
+                        {
+                            case SvgElement.FontParseState.fontStyle:
+                                SvgFontStyle result1;
+                                flag = Enums.TryParse<SvgFontStyle>(str, out result1);
+                                if (flag)
+                                {
+                                    FontStyle = result1;
+                                }
+
+                                ++fontParseState;
+                                continue;
+                            case SvgElement.FontParseState.fontVariant:
+                                SvgFontVariant result2;
+                                flag = Enums.TryParse<SvgFontVariant>(str, out result2);
+                                if (flag)
+                                {
+                                    FontVariant = result2;
+                                }
+
+                                ++fontParseState;
+                                continue;
+                            case SvgElement.FontParseState.fontWeight:
+                                SvgFontWeight result3;
+                                flag = Enums.TryParse<SvgFontWeight>(str, out result3);
+                                if (flag)
+                                {
+                                    FontWeight = result3;
+                                }
+
+                                ++fontParseState;
+                                continue;
+                            case SvgElement.FontParseState.fontSize:
+                                var strArray2 = str.Split('/', StringSplitOptions.None);
+                                try
+                                {
+                                    SvgUnit svgUnit = (SvgUnit)new SvgUnitConverter().ConvertFromInvariantString(strArray2[0]);
+                                    flag = true;
+                                    FontSize = svgUnit;
+                                }
+                                catch
+                                {
+                                }
+                                ++fontParseState;
+                                continue;
+                            case SvgElement.FontParseState.fontFamilyNext:
+                                ++fontParseState;
+                                flag = true;
+                                continue;
+                            default:
+                                continue;
+                        }
+                    }
+                    switch (fontParseState)
+                    {
+                        case SvgElement.FontParseState.fontFamilyNext:
+                            FontFamily = string.Join(" ", strArray1, startIndex + 1, strArray1.Length - (startIndex + 1));
+                            startIndex = 2147483645;
+                            break;
+                        case SvgElement.FontParseState.fontFamilyCurr:
+                            FontFamily = string.Join(" ", strArray1, startIndex, strArray1.Length - startIndex);
+                            startIndex = 2147483645;
+                            break;
+                    }
+                }
+                Attributes["font"] = value;
+                IsPathDirty = true;
+            }
+        }
+
+        internal IFontDefn GetFont(ISvgRenderer renderer)
+        {
+            SvgUnit fontSize = FontSize;
+            var size = fontSize == SvgUnit.None || fontSize == SvgUnit.Empty ? (float)new SvgUnit(SvgUnitType.Em, 1f) : fontSize.ToDeviceValue(renderer, UnitRenderingType.Vertical, this);
+            var obj = SvgElement.ValidateFontFamily(FontFamily, OwnerDocument);
+            if (!(obj is IEnumerable<SvgFontFace> source))
+            {
+                System.Drawing.FontStyle fontStyle = 0;
+                switch (FontWeight)
+                {
+                    case SvgFontWeight.W600:
+                    case SvgFontWeight.Bold:
+                    case SvgFontWeight.W800:
+                    case SvgFontWeight.W900:
+                    case SvgFontWeight.Bolder:
+                        fontStyle = fontStyle | (System.Drawing.FontStyle)1;
+                        break;
+                }
+                switch (FontStyle)
+                {
+                    case SvgFontStyle.Oblique:
+                    case SvgFontStyle.Italic:
+                        fontStyle = fontStyle | (System.Drawing.FontStyle)2;
+                        break;
+                }
+                switch (TextDecoration)
+                {
+                    case SvgTextDecoration.Underline:
+                        fontStyle = fontStyle | (System.Drawing.FontStyle)4;
+                        break;
+                    case SvgTextDecoration.LineThrough:
+                        fontStyle = fontStyle | (System.Drawing.FontStyle)8;
+                        break;
+                }
+                System.Drawing.FontFamily fontFamily = obj as System.Drawing.FontFamily;
+                fontFamily.IsStyleAvailable(fontStyle);
+                return new GdiFontDefn(new System.Drawing.Font(fontFamily, size, fontStyle, (GraphicsUnit)2));
+            }
+            if (!(source.First<SvgFontFace>().Parent is SvgFont font))
+            {
+                font = OwnerDocument.IdManager.GetElementById(source.First<SvgFontFace>().Descendants().OfType<SvgFontFaceUri>().First<SvgFontFaceUri>().ReferencedElement) as SvgFont;
+            }
+
+            return new SvgFontDefn(font, size, OwnerDocument.Ppi);
+        }
+
+        public static object ValidateFontFamily(string fontFamilyList, SvgDocument doc)
+        {
+            foreach (var str in (fontFamilyList ?? string.Empty).Split(',').Select<string, string>(fontName => fontName.Trim('"', ' ', '\'')))
+            {
+                var f = str;
+                if (doc != null && doc.FontDefns().TryGetValue(f, out IEnumerable<SvgFontFace> svgFontFaces))
+                {
+                    return svgFontFaces;
+                }
+
+                System.Drawing.FontFamily fontFamily1;
+                if (doc == null)
+                {
+                    fontFamily1 = null;
+                }
+                else
+                {
+                    System.Drawing.FontFamily[] source = doc.PrivateFontDefns();
+                    fontFamily1 = source != null ? source.FirstOrDefault<System.Drawing.FontFamily>(ff => string.Equals(ff.Name, f, StringComparison.OrdinalIgnoreCase)) : null;
+                }
+                System.Drawing.FontFamily fontFamily2 = fontFamily1;
+                if (fontFamily2 != null)
+                {
+                    return fontFamily2;
+                }
+
+                System.Drawing.FontFamily font = SvgFontManager.FindFont(f);
+                if (font != null)
+                {
+                    return font;
+                }
+
+                System.Drawing.FontFamily fontFamily3 = PrivateFonts.Families.FirstOrDefault<System.Drawing.FontFamily>(ff => string.Equals(ff.Name, f, StringComparison.OrdinalIgnoreCase));
+                if (fontFamily3 != null)
+                {
+                    return fontFamily3;
+                }
+
+                switch (f.ToLower())
+                {
+                    case "serif":
+                        return System.Drawing.FontFamily.GenericSerif;
+                    case "sans-serif":
+                        return System.Drawing.FontFamily.GenericSansSerif;
+                    case "monospace":
+                        return System.Drawing.FontFamily.GenericMonospace;
+                    default:
+                        continue;
+                }
+            }
+            return System.Drawing.FontFamily.GenericSansSerif;
+        }
+
+        protected class PropertyAttributeTuple
+        {
+            public PropertyDescriptor Property;
+            public SvgAttributeAttribute Attribute;
+        }
+
+        protected class EventAttributeTuple
+        {
+            public FieldInfo Event;
+            public SvgAttributeAttribute Attribute;
+        }
+
+        private enum FontParseState
+        {
+            fontStyle,
+            fontVariant,
+            fontWeight,
+            fontSize,
+            fontFamilyNext,
+            fontFamilyCurr,
+        }
     }
 }

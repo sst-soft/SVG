@@ -1,20 +1,33 @@
+﻿// todo: add license
+
+using System.Drawing.Drawing2D;
+using System.Globalization;
+
 namespace Svg.Transforms
 {
-    public sealed partial class SvgScale : SvgTransform
+    public sealed class SvgScale : SvgTransform
     {
         public float X { get; set; }
 
         public float Y { get; set; }
 
+        public override Matrix Matrix
+        {
+            get
+            {
+                Matrix matrix = new Matrix();
+                matrix.Scale(X, Y);
+                return matrix;
+            }
+        }
+
         public override string WriteToString()
         {
-            if (X == Y)
-                return $"scale({X.ToSvgString()})";
-            return $"scale({X.ToSvgString()}, {Y.ToSvgString()})";
+            return (double)X == (double)Y ? string.Format(CultureInfo.InvariantCulture, "scale({0})", X) : string.Format(CultureInfo.InvariantCulture, "scale({0}, {1})", X, Y);
         }
 
         public SvgScale(float x)
-            : this(x, x)
+      : this(x, x)
         {
         }
 

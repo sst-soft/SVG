@@ -1,230 +1,156 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
+﻿// todo: add license
+
 using System.Net;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Svg
 {
-    /// <summary>
-    /// Provides methods to ensure element ID's are valid and unique.
-    /// </summary>
     public class SvgElementIdManager
     {
-        private SvgDocument _document;
-        private Dictionary<string, SvgElement> _idValueMap;
+        private readonly SvgDocument _document;
+        private readonly Dictionary<string, SvgElement> _idValueMap;
+        private static readonly Regex regex = new Regex("#\\d+$");
 
-        internal ExternalType ResolveExternalElements
-        {
-            get { return SvgDocument.ResolveExternalElements; }
-        }
-
-        /// <summary>
-        /// Retrieves the <see cref="SvgElement"/> with the specified ID.
-        /// </summary>
-        /// <param name="id">A <see cref="string"/> containing the ID of the element to find.</param>
-        /// <returns>An <see cref="SvgElement"/> of one exists with the specified ID; otherwise false.</returns>
         public virtual SvgElement GetElementById(string id)
         {
-            id = GetUrlString(id);
+            id = Utility.GetUrlString(id);
             if (id.StartsWith("#"))
             {
                 id = id.Substring(1);
             }
 
-            SvgElement element = null;
-            this._idValueMap.TryGetValue(id, out element);
-
-            return element;
+            _idValueMap.TryGetValue(id, out SvgElement elementById);
+            return elementById;
         }
 
         public virtual SvgElement GetElementById(Uri uri)
         {
-            var urlString = GetUrlString(uri.ToString());
-
+            var urlString = Utility.GetUrlString(uri.ToString());
             if (!urlString.StartsWith("#"))
             {
-                var index = urlString.LastIndexOf('#');
-                var fragment = urlString.Substring(index);
-
-                uri = new Uri(urlString.Remove(index, fragment.Length), UriKind.RelativeOrAbsolute);
-
+                var startIndex = urlString.LastIndexOf('#');
+                var id = urlString.Substring(startIndex);
+                uri = new Uri(urlString.Remove(startIndex, id.Length), UriKind.RelativeOrAbsolute);
                 if (!uri.IsAbsoluteUri && _document.BaseUri != null)
-                    uri = new Uri(_document.BaseUri, uri);
-
-
-                if (!ResolveExternalElements.AllowsResolving(uri))
                 {
-                    Trace.TraceWarning("Trying to resolve element by ID from '{0}', but resolving external resources of that type is disabled.", uri);
-                    return null;
+                    uri = new Uri(_document.BaseUri, uri);
                 }
 
                 if (uri.IsAbsoluteUri)
                 {
                     if (uri.IsFile)
                     {
-                        var doc = SvgDocument.Open<SvgDocument>(uri.LocalPath);
-                        return doc.IdManager.GetElementById(fragment);
+                        return SvgDocument.Open<SvgDocument>(uri.LocalPath).IdManager.GetElementById(id);
                     }
-                    else if (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+
+                    if (!(uri.Scheme == Uri.UriSchemeHttp) && !(uri.Scheme == Uri.UriSchemeHttps))
                     {
-                        var httpRequest = WebRequest.Create(uri);
-                        using (var webResponse = httpRequest.GetResponse())
-                        {
-                            var doc = SvgDocument.Open<SvgDocument>(webResponse.GetResponseStream());
-                            return doc.IdManager.GetElementById(fragment);
-                        }
-                    }
-                    else
                         throw new NotSupportedException();
+                    }
+
+                    using (WebResponse response = WebRequest.Create(uri).GetResponse())
+                    {
+                        return SvgDocument.Open<SvgDocument>(response.GetResponseStream()).IdManager.GetElementById(id);
+                    }
                 }
             }
-
             return GetElementById(urlString);
         }
 
-        private static string GetUrlString(string url)
-        {
-            url = url.Trim();
-            if (url.StartsWith("url(", StringComparison.OrdinalIgnoreCase) && url.EndsWith(")"))
-            {
-                url = new StringBuilder(url).Remove(url.Length - 1, 1).Remove(0, 4).ToString().Trim();
-
-                if ((url.StartsWith("\"") && url.EndsWith("\"")) || (url.StartsWith("'") && url.EndsWith("'")))
-                    url = new StringBuilder(url).Remove(url.Length - 1, 1).Remove(0, 1).ToString().Trim();
-            }
-            return url;
-        }
-
-        /// <summary>
-        /// Adds the specified <see cref="SvgElement"/> for ID management.
-        /// </summary>
-        /// <param name="element">The <see cref="SvgElement"/> to be managed.</param>
         public virtual void Add(SvgElement element)
         {
             AddAndForceUniqueID(element, null, false);
         }
 
-        /// <summary>
-        /// Adds the specified <see cref="SvgElement"/> for ID management.
-        /// And can auto fix the ID if it already exists or it starts with a number.
-        /// </summary>
-        /// <param name="element">The <see cref="SvgElement"/> to be managed.</param>
-        /// <param name="sibling">Not used.</param>
-        /// <param name="autoForceUniqueID">Pass true here, if you want the ID to be fixed</param>
-        /// <param name="logElementOldIDNewID">If not null, the action is called before the id is fixed</param>
-        /// <returns>true, if ID was altered</returns>
-        public virtual bool AddAndForceUniqueID(SvgElement element, SvgElement sibling, bool autoForceUniqueID = true, Action<SvgElement, string, string> logElementOldIDNewID = null)
+        public virtual bool AddAndForceUniqueID(
+      SvgElement element,
+      SvgElement sibling,
+      bool autoForceUniqueID = true,
+      Action<SvgElement, string, string> logElementOldIDNewID = null)
         {
-            var result = false;
+            var flag = false;
             if (!string.IsNullOrEmpty(element.ID))
             {
-                var newID = this.EnsureValidId(element.ID, autoForceUniqueID);
+                var newID = EnsureValidId(element.ID, autoForceUniqueID);
                 if (autoForceUniqueID && newID != element.ID)
                 {
                     if (logElementOldIDNewID != null)
+                    {
                         logElementOldIDNewID(element, element.ID, newID);
-                    element.ForceUniqueID(newID);
-                    result = true;
-                }
-                this._idValueMap.Add(element.ID, element);
-            }
+                    }
 
+                    element.ForceUniqueID(newID);
+                    flag = true;
+                }
+                _idValueMap.Add(element.ID, element);
+            }
             OnAdded(element);
-            return result;
+            return flag;
         }
 
-        /// <summary>
-        /// Removed the specified <see cref="SvgElement"/> from ID management.
-        /// </summary>
-        /// <param name="element">The <see cref="SvgElement"/> to be removed from ID management.</param>
         public virtual void Remove(SvgElement element)
         {
             if (!string.IsNullOrEmpty(element.ID))
             {
-                this._idValueMap.Remove(element.ID);
+                _idValueMap.Remove(element.ID);
             }
 
             OnRemoved(element);
         }
 
-        /// <summary>
-        /// Ensures that the specified ID is unique within the containing <see cref="SvgDocument"/>.
-        /// </summary>
-        /// <param name="id">A <see cref="string"/> containing the ID to validate.</param>
-        /// <param name="autoForceUniqueID">Creates a new unique id <see cref="string"/>.</param>
-        /// <exception cref="SvgException">
-        /// <para>An element with the same ID already exists within the containing <see cref="SvgDocument"/>.</para>
-        /// </exception>
         public string EnsureValidId(string id, bool autoForceUniqueID = false)
         {
-
-            if (string.IsNullOrEmpty(id))
+            if (string.IsNullOrEmpty(id) || !_idValueMap.ContainsKey(id))
             {
                 return id;
             }
 
-            if (this._idValueMap.ContainsKey(id))
+            if (!autoForceUniqueID)
             {
-                if (autoForceUniqueID)
-                {
-                    var match = regex.Match(id);
-
-                    int number;
-                    if (match.Success && int.TryParse(match.Value.Substring(1), out number))
-                    {
-                        id = regex.Replace(id, "#" + (number + 1));
-                    }
-                    else
-                    {
-                        id += "#1";
-                    }
-
-                    return EnsureValidId(id, true);
-                }
                 throw new SvgIDExistsException("An element with the same ID already exists: '" + id + "'.");
             }
 
-            return id;
+            Match match = SvgElementIdManager.regex.Match(id);
+            id = !match.Success || !int.TryParse(match.Value.Substring(1), out var result) ? id + "#1" : SvgElementIdManager.regex.Replace(id, "#" + (result + 1).ToString());
+            return EnsureValidId(id, true);
         }
-        private static readonly Regex regex = new Regex(@"#\d+$");
 
-        /// <summary>
-        /// Initialises a new instance of an <see cref="SvgElementIdManager"/>.
-        /// </summary>
-        /// <param name="document">The <see cref="SvgDocument"/> containing the <see cref="SvgElement"/>s to manage.</param>
         public SvgElementIdManager(SvgDocument document)
         {
-            this._document = document;
-            this._idValueMap = new Dictionary<string, SvgElement>();
+            _document = document;
+            _idValueMap = new Dictionary<string, SvgElement>();
         }
 
         public event EventHandler<SvgElementEventArgs> ElementAdded;
+
         public event EventHandler<SvgElementEventArgs> ElementRemoved;
 
         protected void OnAdded(SvgElement element)
         {
-            var handler = ElementAdded;
-            if (handler != null)
+            EventHandler<SvgElementEventArgs> elementAdded = ElementAdded;
+            if (elementAdded == null)
             {
-                handler(this._document, new SvgElementEventArgs { Element = element });
+                return;
             }
+
+            elementAdded(_document, new SvgElementEventArgs()
+            {
+                Element = element
+            });
         }
 
         protected void OnRemoved(SvgElement element)
         {
-            var handler = ElementRemoved;
-            if (handler != null)
+            EventHandler<SvgElementEventArgs> elementRemoved = ElementRemoved;
+            if (elementRemoved == null)
             {
-                handler(this._document, new SvgElementEventArgs { Element = element });
+                return;
             }
+
+            elementRemoved(_document, new SvgElementEventArgs()
+            {
+                Element = element
+            });
         }
-
-    }
-
-    public class SvgElementEventArgs : EventArgs
-    {
-        public SvgElement Element;
     }
 }

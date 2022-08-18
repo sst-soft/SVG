@@ -1,3 +1,15 @@
+# Excessive stripped-down SVG rendering tool for .NET6
+
+## Fork modifications:
+This repository is a fork from [svg-net](https://github.com/svg-net/SVG), which itself is a fork of [svg.codeplex.com](https://svg.codeplex.com/). 
+This fork was created, to build a **very** stripped down version with only **.NET6** support.
+There will be *no* active development on this fork, other than merging from underlying respositories. For more complex implementation, please visit the relevant forks instead.
+Only use this fork, if you know what you are doing! You have been warned :-)
+
+# Original Readme.md
+<details><summary>Click to open Readme.md</summary>
+<p>
+
 ![W3C SVG Logo](https://www.w3.org/Icons/SVG/svg-logo-v.png)
 # SVG.NET[![NuGet version](https://badge.fury.io/nu/svg.svg)](https://badge.fury.io/nu/svg) [![Gitter](https://badges.gitter.im/vvvv/SVG.svg)](https://gitter.im/vvvv/SVG?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge) ![Testsuite](https://github.com/svg-net/SVG/workflows/Testsuite/badge.svg?branch=master) ![DocBuild](https://github.com/svg-net/SVG/workflows/DocBuild/badge.svg?branch=master)
 
@@ -29,3 +41,6 @@ This project has dependencies on other open-source projects. These projects are 
 |--------|-----|---|---------|
 |Fizzler|Atif Aziz (@atifaziz)|[GitHub](https://github.com/atifaziz/Fizzler)|[LGPL](https://github.com/atifaziz/Fizzler/blob/master/COPYING.txt)|
 |ExCSS|Tyler Brinks (@tylerbrinks)|[GitHub](https://github.com/TylerBrinks/ExCSS)|[MIT](https://github.com/TylerBrinks/ExCSS/blob/master/license.txt)|
+
+</p>
+</details>

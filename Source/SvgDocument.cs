@@ -1,135 +1,104 @@
-﻿using System;
-using System.Collections.Generic;
+﻿// todo: add license
+
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
-using System.Text;
-using System.Xml;
-using System.Linq;
-using Svg.Css;
-using System.Threading;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Xml;
+using Svg.Css;
+using Svg.Exceptions;
 using ExCSS;
 
 namespace Svg
 {
-    /// <summary>
-    /// The class used to create and load SVG documents.
-    /// </summary>
-    public partial class SvgDocument : SvgFragment, ITypeDescriptorContext
+    public class SvgDocument : SvgFragment, ITypeDescriptorContext, IServiceProvider
     {
-        /// <summary>
-        /// Skip the Dtd Processing for faster loading of svgs that have a DTD specified.
-        /// For Example Adobe Illustrator svgs.
-        /// </summary>
-        public static bool DisableDtdProcessing { get; set; }
-
-        /// <summary>
-        /// Which types of XML external entities are allowed to be resolved. Defaults to <see cref="ExternalType.None"/> to prevent XXE.
-        /// </summary>
-        /// <see ref="https://owasp.org/www-community/vulnerabilities/XML_External_Entity_(XXE)_Processing"/>
-        public static ExternalType ResolveExternalXmlEntites { get; set; } = ExternalType.None;
-
-        /// <summary>
-        /// Which types of external images are allowed to be resolved. Defaults to <see cref="ExternalType.Local"/> and <see cref="ExternalType.Remote"/>.
-        /// </summary>
-        public static ExternalType ResolveExternalImages { get; set; } = ExternalType.Local | ExternalType.Remote;
-
-        /// <summary>
-        /// Which types of external elements, for example text definitions, are allowed to be resolved. Defaults to <see cref="ExternalType.Local"/> and <see cref="ExternalType.Remote"/>.
-        /// </summary>
-        public static ExternalType ResolveExternalElements { get; set; } = ExternalType.Local | ExternalType.Remote;
-
-        private static int? pointsPerInch;
-
-        public static int PointsPerInch
-        {
-            get { return pointsPerInch ?? (int)(pointsPerInch = GetSystemDpi()); }
-            set { pointsPerInch = value; }
-        }
-
+        public static readonly int PointsPerInch = SvgDocument.GetSystemDpi();
         private SvgElementIdManager _idManager;
-
-        private Dictionary<string, IEnumerable<SvgFontFace>> _fontDefns = null;
-
-        public override SvgUnit X
-        {
-            get { return 0f; }
-        }
-
-        public override SvgUnit Y
-        {
-            get { return 0f; }
-        }
-
-        public override SvgOverflow Overflow
-        {
-            get { return GetAttribute("overflow", false, SvgOverflow.Visible); }
-        }
+        private Dictionary<string, IEnumerable<SvgFontFace>> _fontDefns;
+        private PrivateFontCollection _privateFonts;
+        private IList<FontFaceRule> _fontFaceDirectives;
 
         private static int GetSystemDpi()
         {
-            bool isWindows;
-
-#if NETCORE
-            isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-#else
-            var platform = Environment.OSVersion.Platform;
-            isWindows = platform == PlatformID.Win32NT;
-#endif
-
-            if (isWindows)
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return GetWin32SystemDpi();
-            }
-            else
-            {
-                // hack for macOS and Linux
                 return 96;
             }
+
+            IntPtr dc = SvgDocument.GetDC(IntPtr.Zero);
+            var deviceCaps = SvgDocument.GetDeviceCaps(dc, 90);
+            SvgDocument.ReleaseDC(IntPtr.Zero, dc);
+            return deviceCaps;
         }
+
+        [DllImport("gdi32.dll")]
+        private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
 
         internal Dictionary<string, IEnumerable<SvgFontFace>> FontDefns()
         {
             if (_fontDefns == null)
             {
-                _fontDefns = (from f in Descendants().OfType<SvgFontFace>()
-                              group f by f.FontFamily into family
-                              select family).ToDictionary(f => f.Key, f => (IEnumerable<SvgFontFace>)f);
+                _fontDefns = Descendants().OfType<SvgFontFace>().GroupBy<SvgFontFace, string>(f => f.FontFamily).Select<IGrouping<string, SvgFontFace>, IGrouping<string, SvgFontFace>>(family => family).ToDictionary<IGrouping<string, SvgFontFace>, string, IEnumerable<SvgFontFace>>(f => f.Key, f => f);
             }
+
             return _fontDefns;
         }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SvgDocument"/> class.
-        /// </summary>
+        internal FontFamily[] PrivateFontDefns()
+        {
+            if (_privateFonts == null)
+            {
+                _privateFonts = new PrivateFontCollection();
+                if (_fontFaceDirectives != null)
+                {
+                    foreach (FontFaceRule fontFaceDirective in (IEnumerable<FontFaceRule>)_fontFaceDirectives)
+                    {
+                        try
+                        {
+                            var source = SvgDocument.downBytes(fontFaceDirective.Src, BaseUri);
+                            IntPtr destination = Marshal.AllocHGlobal(source.Length);
+                            Marshal.Copy(source, 0, destination, source.Length);
+                            _privateFonts.AddMemoryFont(destination, source.Length);
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.TraceWarning(ex.Message);
+                        }
+                    }
+                }
+            }
+            return _privateFonts.Families;
+        }
+
+        private static byte[] downBytes(string url, Uri baseUri)
+        {
+            Uri uri = new Uri(Utility.GetUrlString(url), UriKind.RelativeOrAbsolute);
+            if (!uri.IsAbsoluteUri && baseUri != null)
+            {
+                uri = new Uri(baseUri, uri);
+            }
+
+            return Utility.GetBytesFromUri(uri)?.DataBytes;
+        }
+
         public SvgDocument()
         {
-            Ppi = PointsPerInch;
-
-            Namespaces.Add(string.Empty, SvgNamespaces.SvgNamespace);
-            Namespaces.Add(SvgNamespaces.XLinkPrefix, SvgNamespaces.XLinkNamespace);
-            Namespaces.Add(SvgNamespaces.XmlPrefix, SvgNamespaces.XmlNamespace);
+            Ppi = SvgDocument.PointsPerInch;
         }
 
-        private Uri baseUri;
+        public Uri BaseUri { get; set; }
 
-        public Uri BaseUri
-        {
-            get { return baseUri; }
-            set
-            {
-                if (value != null && !value.IsAbsoluteUri)
-                    throw new ArgumentException("BaseUri is not absolute.");
-                baseUri = value;
-            }
-        }
-
-        /// <summary>
-        /// Gets an <see cref="SvgElementIdManager"/> for this document.
-        /// </summary>
         protected internal virtual SvgElementIdManager IdManager
         {
             get
@@ -143,38 +112,18 @@ namespace Svg
             }
         }
 
-        /// <summary>
-        /// Overwrites the current IdManager with a custom implementation.
-        /// Be careful with this: If elements have been inserted into the document before,
-        /// you have to take care that the new IdManager also knows of them.
-        /// </summary>
-        /// <param name="manager"></param>
         public void OverwriteIdManager(SvgElementIdManager manager)
         {
             _idManager = manager;
         }
 
-        /// <summary>
-        /// Gets or sets the Pixels Per Inch of the rendered image.
-        /// </summary>
         public int Ppi { get; set; }
 
-        /// <summary>
-        /// Gets or sets an external Cascading Style Sheet (CSS)
-        /// </summary>
         public string ExternalCSSHref { get; set; }
 
-        #region ITypeDescriptorContext Members
+        IContainer ITypeDescriptorContext.Container => throw new NotImplementedException();
 
-        IContainer ITypeDescriptorContext.Container
-        {
-            get { throw new NotImplementedException(); }
-        }
-
-        object ITypeDescriptorContext.Instance
-        {
-            get { return this; }
-        }
+        object ITypeDescriptorContext.Instance => this;
 
         void ITypeDescriptorContext.OnComponentChanged()
         {
@@ -186,72 +135,98 @@ namespace Svg
             throw new NotImplementedException();
         }
 
-        PropertyDescriptor ITypeDescriptorContext.PropertyDescriptor
-        {
-            get { throw new NotImplementedException(); }
-        }
+        PropertyDescriptor ITypeDescriptorContext.PropertyDescriptor => throw new NotImplementedException();
 
         object IServiceProvider.GetService(Type serviceType)
         {
             throw new NotImplementedException();
         }
 
-        #endregion
-
-        /// <summary>
-        /// Retrieves the <see cref="SvgElement"/> with the specified ID.
-        /// </summary>
-        /// <param name="id">A <see cref="string"/> containing the ID of the element to find.</param>
-        /// <returns>An <see cref="SvgElement"/> of one exists with the specified ID; otherwise false.</returns>
         public virtual SvgElement GetElementById(string id)
         {
             return IdManager.GetElementById(id);
         }
 
-        /// <summary>
-        /// Retrieves the <see cref="SvgElement"/> with the specified ID.
-        /// </summary>
-        /// <param name="id">A <see cref="string"/> containing the ID of the element to find.</param>
-        /// <returns>An <see cref="SvgElement"/> of one exists with the specified ID; otherwise false.</returns>
         public virtual TSvgElement GetElementById<TSvgElement>(string id) where TSvgElement : SvgElement
         {
-            return (this.GetElementById(id) as TSvgElement);
+            return GetElementById(id) as TSvgElement;
         }
 
-        /// <summary>
-        /// Opens the document at the specified path and loads the SVG contents.
-        /// </summary>
-        /// <param name="path">A <see cref="string"/> containing the path of the file to open.</param>
-        /// <returns>An <see cref="SvgDocument"/> with the contents loaded.</returns>
-        /// <exception cref="FileNotFoundException">The document at the specified <paramref name="path"/> cannot be found.</exception>
+        public static bool SystemIsGdiPlusCapable()
+        {
+            try
+            {
+                SvgDocument.EnsureSystemIsGdiPlusCapable();
+            }
+            catch (SvgGdiPlusCannotBeLoadedException)
+            {
+                return false;
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+            return true;
+        }
+
+        public static void EnsureSystemIsGdiPlusCapable()
+        {
+            try
+            {
+                using (new Matrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f)) { }
+            }
+            catch (Exception ex)
+            {
+                if (SvgDocument.ExceptionCaughtIsGdiPlusRelated(ex))
+                {
+                    throw new SvgGdiPlusCannotBeLoadedException(ex);
+                }
+
+                throw;
+            }
+        }
+
+        private static bool ExceptionCaughtIsGdiPlusRelated(Exception e)
+        {
+            Exception exception = e;
+            for (var index = 0; exception != null && index < 10; ++index)
+            {
+                int num1;
+                if (!(exception is DllNotFoundException notFoundException))
+                {
+                    num1 = 0;
+                }
+                else
+                {
+                    var nullable = notFoundException.Message?.LastIndexOf("libgdiplus", StringComparison.OrdinalIgnoreCase);
+                    var num2 = -1;
+                    num1 = nullable.GetValueOrDefault() > num2 & nullable.HasValue ? 1 : 0;
+                }
+                if (num1 != 0)
+                {
+                    return true;
+                }
+
+                exception = exception.InnerException;
+            }
+            return false;
+        }
+
         public static SvgDocument Open(string path)
         {
-            return Open<SvgDocument>(path, null);
+            return SvgDocument.Open<SvgDocument>(path, null);
         }
 
-        /// <summary>
-        /// Opens the document at the specified path and loads the SVG contents.
-        /// </summary>
-        /// <param name="path">A <see cref="string"/> containing the path of the file to open.</param>
-        /// <returns>An <see cref="SvgDocument"/> with the contents loaded.</returns>
-        /// <exception cref="FileNotFoundException">The document at the specified <paramref name="path"/> cannot be found.</exception>
         public static T Open<T>(string path) where T : SvgDocument, new()
         {
-            return Open<T>(path, null);
+            return SvgDocument.Open<T>(path, null);
         }
 
-        /// <summary>
-        /// Opens the document at the specified path and loads the SVG contents.
-        /// </summary>
-        /// <param name="path">A <see cref="string"/> containing the path of the file to open.</param>
-        /// <param name="entities">A dictionary of custom entity definitions to be used when resolving XML entities within the document.</param>
-        /// <returns>An <see cref="SvgDocument"/> with the contents loaded.</returns>
-        /// <exception cref="FileNotFoundException">The document at the specified <paramref name="path"/> cannot be found.</exception>
         public static T Open<T>(string path, Dictionary<string, string> entities) where T : SvgDocument, new()
         {
             if (string.IsNullOrEmpty(path))
             {
-                throw new ArgumentNullException("path");
+                throw new ArgumentNullException(nameof(path));
             }
 
             if (!File.Exists(path))
@@ -259,107 +234,52 @@ namespace Svg
                 throw new FileNotFoundException("The specified document cannot be found.", path);
             }
 
-            using (var stream = File.OpenRead(path))
+            using (FileStream fileStream = File.OpenRead(path))
             {
-                var doc = Open<T>(stream, entities);
-                doc.BaseUri = new Uri(System.IO.Path.GetFullPath(path));
-                return doc;
+                T obj = SvgDocument.Open<T>(fileStream, entities);
+                obj.BaseUri = new Uri(System.IO.Path.GetFullPath(path));
+                return obj;
             }
         }
 
-        /// <summary>
-        /// Attempts to open an SVG document from the specified <see cref="Stream"/>.
-        /// </summary>
-        /// <param name="stream">The <see cref="Stream"/> containing the SVG document to open.</param>
         public static T Open<T>(Stream stream) where T : SvgDocument, new()
         {
-            return Open<T>(stream, null);
+            return SvgDocument.Open<T>(stream, null);
         }
 
-        /// <summary>
-        /// Opens an SVG document from the specified <see cref="Stream"/> and adds the specified entities.
-        /// </summary>
-        /// <param name="stream">The <see cref="Stream"/> containing the SVG document to open.</param>
-        /// <param name="entities">Custom entity definitions.</param>
-        /// <exception cref="ArgumentNullException">The <paramref name="stream"/> parameter cannot be <c>null</c>.</exception>
-        public static T Open<T>(Stream stream, Dictionary<string, string> entities) where T : SvgDocument, new()
-        {
-            if (stream == null)
-            {
-                throw new ArgumentNullException("stream");
-            }
-
-            // Don't close the stream via a dispose: that is the client's job.
-            var reader = new SvgTextReader(stream, entities)
-            {
-                XmlResolver = new SvgDtdResolver(),
-                WhitespaceHandling = WhitespaceHandling.Significant,
-                DtdProcessing = DisableDtdProcessing ? DtdProcessing.Ignore : DtdProcessing.Parse,
-            };
-            return Create<T>(reader);
-        }
-
-        /// <summary>
-        /// Attempts to create an SVG document from the specified string data.
-        /// </summary>
-        /// <param name="svg">The SVG data.</param>
         public static T FromSvg<T>(string svg) where T : SvgDocument, new()
         {
             if (string.IsNullOrEmpty(svg))
             {
-                throw new ArgumentNullException("svg");
+                throw new ArgumentNullException(nameof(svg));
             }
 
-            using (var strReader = new StringReader(svg))
+            using (StringReader reader1 = new StringReader(svg))
             {
-                var reader = new SvgTextReader(strReader, null)
+                SvgTextReader reader2 = new SvgTextReader(reader1, null)
                 {
                     XmlResolver = new SvgDtdResolver(),
-                    WhitespaceHandling = WhitespaceHandling.Significant,
-                    DtdProcessing = DisableDtdProcessing ? DtdProcessing.Ignore : DtdProcessing.Parse,
+                    WhitespaceHandling = (WhitespaceHandling)2
                 };
-                return Create<T>(reader);
+                return SvgDocument.Open<T>(reader2);
             }
         }
 
-        /// <summary>
-        /// Attempts to open an SVG document from the specified <see cref="XmlReader"/>.
-        /// </summary>
-        /// <param name="reader">The <see cref="XmlReader"/> containing the SVG document to open.</param>
-        public static T Open<T>(XmlReader reader) where T : SvgDocument, new()
+        public static T Open<T>(Stream stream, Dictionary<string, string> entities) where T : SvgDocument, new()
         {
-            if (reader == null)
-            {
-                throw new ArgumentNullException("reader");
-            }
-
-            using (var svgReader = XmlReader.Create(reader, new XmlReaderSettings()
-            {
-                XmlResolver = new SvgDtdResolver(),
-                DtdProcessing = DtdProcessing.Parse,
-            }))
-            {
-                return Create<T>(svgReader);
-            }
+            SvgTextReader reader = stream != null ? new SvgTextReader(stream, entities) : throw new ArgumentNullException(nameof(stream));
+            reader.XmlResolver = new SvgDtdResolver();
+            reader.WhitespaceHandling = (WhitespaceHandling)2;
+            return SvgDocument.Open<T>(reader);
         }
 
-        private static T Create<T>(XmlReader reader) where T : SvgDocument, new()
+        private static T Open<T>(XmlReader reader) where T : SvgDocument, new()
         {
-#if !NO_SDC
-            if (!SkipGdiPlusCapabilityCheck)
-            {
-                EnsureSystemIsGdiPlusCapable(); // Validate whether the GDI+ can be loaded, this will yield an exception if not
-            }
-#endif
-            var elementStack = new Stack<SvgElement>();
-            bool elementEmpty;
-            SvgElement element = null;
-            SvgElement parent;
-            T svgDocument = null;
-            var elementFactory = new SvgElementFactory();
-
-            var styles = new List<ISvgNode>();
-
+            SvgDocument.EnsureSystemIsGdiPlusCapable();
+            Stack<SvgElement> svgElementStack = new Stack<SvgElement>();
+            T document = default(T);
+            SvgElementFactory elementFactory = new SvgElementFactory();
+            List<ISvgNode> source = new List<ISvgNode>();
             while (reader.Read())
             {
                 try
@@ -367,157 +287,264 @@ namespace Svg
                     switch (reader.NodeType)
                     {
                         case XmlNodeType.Element:
-                            // Does this element have a value or children
-                            // (Must do this check here before we progress to another node)
-                            elementEmpty = reader.IsEmptyElement;
-                            // Create element
-                            if (elementStack.Count > 0)
+                            var num = reader.IsEmptyElement ? 1 : 0;
+                            SvgElement svgElement1;
+                            if (svgElementStack.Count > 0)
                             {
-                                element = elementFactory.CreateElement(reader, svgDocument);
+                                svgElement1 = elementFactory.CreateElement(reader, document);
                             }
                             else
                             {
-                                svgDocument = elementFactory.CreateDocument<T>(reader);
-                                element = svgDocument;
+                                document = elementFactory.CreateDocument<T>(reader);
+                                svgElement1 = document;
                             }
-
-                            // Add to the parents children
-                            if (elementStack.Count > 0)
+                            if (svgElementStack.Count > 0)
                             {
-                                parent = elementStack.Peek();
-                                if (parent != null && element != null)
+                                SvgElement svgElement2 = svgElementStack.Peek();
+                                if (svgElement2 != null && svgElement1 != null)
                                 {
-                                    parent.Children.Add(element);
-                                    parent.Nodes.Add(element);
+                                    svgElement2.Children.Add(svgElement1);
+                                    svgElement2.Nodes.Add(svgElement1);
                                 }
                             }
-
-                            // Push element into stack
-                            elementStack.Push(element);
-
-                            // Need to process if the element is empty
-                            if (elementEmpty)
+                            svgElementStack.Push(svgElement1);
+                            if (num == 0)
                             {
-                                goto case XmlNodeType.EndElement;
+                                continue;
                             }
 
-                            break;
-                        case XmlNodeType.EndElement:
-
-                            // Pop the element out of the stack
-                            element = elementStack.Pop();
-
-                            if (element.Nodes.OfType<SvgContentNode>().Any())
+                            goto case XmlNodeType.EndElement;
+                        case XmlNodeType.Text:
+                        case XmlNodeType.CDATA:
+                            svgElementStack.Peek().Nodes.Add(new SvgContentNode()
                             {
-                                element.Content = string.Concat((from n in element.Nodes select n.Content).ToArray());
+                                Content = reader.Value
+                            });
+                            continue;
+                        case XmlNodeType.EntityReference:
+                            reader.ResolveEntity();
+                            svgElementStack.Peek().Nodes.Add(new SvgContentNode()
+                            {
+                                Content = reader.Value
+                            });
+                            continue;
+                        case XmlNodeType.EndElement:
+                            SvgElement svgElement3 = svgElementStack.Pop();
+                            if (svgElement3.Nodes.OfType<SvgContentNode>().Any<SvgContentNode>())
+                            {
+                                svgElement3.Content = svgElement3.Nodes.Select<ISvgNode, string>(e => e.Content).Aggregate<string>((p, c) => p + c);
                             }
                             else
                             {
-                                element.Nodes.Clear(); // No sense wasting the space where it isn't needed
+                                svgElement3.Nodes.Clear();
                             }
 
-                            var unknown = element as SvgUnknownElement;
-                            if (unknown != null && unknown.ElementName == "style")
+                            if (svgElement3 is SvgUnknownElement svgUnknownElement)
                             {
-                                styles.Add(unknown);
+                                if (svgUnknownElement.ElementName == "style")
+                                {
+                                    source.Add(svgUnknownElement);
+                                    continue;
+                                }
+                                continue;
                             }
-                            break;
-                        case XmlNodeType.CDATA:
-                        case XmlNodeType.Text:
-                        case XmlNodeType.SignificantWhitespace:
-                            element = elementStack.Peek();
-                            element.Nodes.Add(new SvgContentNode() { Content = reader.Value });
-                            break;
-                        case XmlNodeType.EntityReference:
-                            reader.ResolveEntity();
-                            element = elementStack.Peek();
-                            element.Nodes.Add(new SvgContentNode() { Content = reader.Value });
-                            break;
+                            continue;
+                        default:
+                            continue;
                     }
                 }
-                catch (Exception exc)
+                catch (Exceptions.FizzlerException ex)
                 {
-                    Trace.TraceError(exc.Message);
+                    throw ex;
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceError(ex.Message);
                 }
             }
-
-            if (styles.Any())
+            if (source.Any<ISvgNode>())
             {
-                var cssTotal = string.Join(Environment.NewLine, styles.Select(s => s.Content).ToArray());
-                var stylesheetParser = new StylesheetParser(true, true);
-                var stylesheet = stylesheetParser.Parse(cssTotal);
-
-                foreach (var rule in stylesheet.StyleRules)
-                    try
+                StyleSheet styleSheet = new Parser().Parse(source.Select<ISvgNode, string>(s => s.Content).Aggregate<string>((p, c) => p + Environment.NewLine + c));
+                foreach (StyleRule styleRule in (IEnumerable<StyleRule>)styleSheet.StyleRules)
+                {
+                    foreach (BaseSelector baseSelector in !(styleRule.Selector is AggregateSelectorList selector) || !(selector.Delimiter == ",") ? Enumerable.Repeat<BaseSelector>(styleRule.Selector, 1) : selector)
                     {
-                        var rootNode = new NonSvgElement();
-                        rootNode.Children.Add(svgDocument);
-
-                        var elemsToStyle = rootNode.QuerySelectorAll(rule.Selector.Text, elementFactory);
-                        foreach (var elem in elemsToStyle)
-                            foreach (var declaration in rule.Style)
+                        try
+                        {
+                            NonSvgElement elem = new NonSvgElement();
+                            elem.Children.Add(document);
+                            foreach (SvgElement svgElement in elem.QuerySelectorAll(styleRule.Selector.ToString(), elementFactory))
                             {
-                                elem.AddStyle(declaration.Name, declaration.Value, rule.Selector.GetSpecificity());
+                                foreach (Property declaration in styleRule.Declarations)
+                                {
+                                    svgElement.AddStyle(declaration.Name, declaration.Term.ToString(), styleRule.Selector.GetSpecificity());
+                                }
                             }
+                        }
+                        catch (FizzlerException ex)
+                        {
+                            throw ex;
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.TraceWarning(ex.Message);
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        Trace.TraceWarning(ex.Message);
-                    }
+                }
+                document._fontFaceDirectives = styleSheet.FontFaceDirectives;
             }
-
-            svgDocument?.FlushStyles(true);
-            return svgDocument;
+            document?.FlushStyles(true);
+            return document;
         }
 
-        /// <summary>
-        /// Opens an SVG document from the specified <see cref="XmlDocument"/>.
-        /// </summary>
-        /// <param name="document">The <see cref="XmlDocument"/> containing the SVG document XML.</param>
-        /// <exception cref="ArgumentNullException">The <paramref name="document"/> parameter cannot be <c>null</c>.</exception>
         public static SvgDocument Open(XmlDocument document)
         {
-            if (document == null)
-            {
-                throw new ArgumentNullException("document");
-            }
-
-            var reader = new SvgNodeReader(document.DocumentElement, null);
-            return Create<SvgDocument>(reader);
+            return document != null ? SvgDocument.Open<SvgDocument>(new SvgNodeReader(document.DocumentElement, null)) : throw new ArgumentNullException(nameof(document));
         }
 
-        /// <summary>
-        /// If both or one of raster height and width is not given (0), calculate that missing value from original SVG size
-        /// while keeping original SVG size ratio
-        /// </summary>
-        /// <param name="size"></param>
-        /// <param name="rasterWidth"></param>
-        /// <param name="rasterHeight"></param>
+        public static Bitmap OpenAsBitmap(string path)
+        {
+            return null;
+        }
+
+        public static Bitmap OpenAsBitmap(XmlDocument document)
+        {
+            return null;
+        }
+
+        private void Draw(ISvgRenderer renderer, ISvgBoundable boundable)
+        {
+            renderer.SetBoundable(boundable);
+            Render(renderer);
+        }
+
+        public void Draw(ISvgRenderer renderer)
+        {
+            if (renderer == null)
+            {
+                throw new ArgumentNullException(nameof(renderer));
+            }
+
+            Draw(renderer, this);
+        }
+
+        public void Draw(Graphics graphics)
+        {
+            Draw(graphics, new SizeF?());
+        }
+
+        public void Draw(Graphics graphics, SizeF? size)
+        {
+            if (graphics == null)
+            {
+                throw new ArgumentNullException(nameof(graphics));
+            }
+
+            using (ISvgRenderer renderer = SvgRenderer.FromGraphics(graphics))
+            {
+                ISvgBoundable boundable = size.HasValue ? new GenericBoundable(0.0f, 0.0f, size.Value.Width, size.Value.Height) : this;
+                Draw(renderer, boundable);
+            }
+        }
+
+        public virtual Bitmap Draw()
+        {
+            Bitmap bitmap = null;
+            try
+            {
+                try
+                {
+                    SizeF dimensions = GetDimensions();
+                    bitmap = new Bitmap((int)Math.Round((double)dimensions.Width), (int)Math.Round((double)dimensions.Height));
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new SvgMemoryException("Cannot process SVG file, cannot allocate the required memory", ex);
+                }
+                Draw(bitmap);
+            }
+            catch
+            {
+                ((Image)bitmap)?.Dispose();
+                throw;
+            }
+            return bitmap;
+        }
+
+        public virtual void Draw(Bitmap bitmap)
+        {
+            using (ISvgRenderer renderer = SvgRenderer.FromImage(bitmap))
+            {
+                Overflow = SvgOverflow.Auto;
+                GenericBoundable boundable = new GenericBoundable(0.0f, 0.0f, bitmap.Width, bitmap.Height);
+                Draw(renderer, boundable);
+            }
+        }
+
+        public virtual Bitmap Draw(int rasterWidth, int rasterHeight)
+        {
+            SizeF dimensions = GetDimensions();
+            SizeF size = dimensions;
+            RasterizeDimensions(ref size, rasterWidth, rasterHeight);
+            if ((double)size.Width == 0.0 || (double)size.Height == 0.0)
+            {
+                return null;
+            }
+
+            Bitmap bitmap = null;
+            try
+            {
+                try
+                {
+                    bitmap = new Bitmap((int)Math.Round((double)size.Width), (int)Math.Round((double)size.Height));
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new SvgMemoryException("Cannot process SVG file, cannot allocate the required memory", ex);
+                }
+                using (ISvgRenderer renderer = SvgRenderer.FromImage(bitmap))
+                {
+                    renderer.ScaleTransform(size.Width / dimensions.Width, size.Height / dimensions.Height);
+                    GenericBoundable boundable = new GenericBoundable(0.0f, 0.0f, dimensions.Width, dimensions.Height);
+                    Draw(renderer, boundable);
+                }
+            }
+            catch
+            {
+                ((Image)bitmap)?.Dispose();
+                throw;
+            }
+            return bitmap;
+        }
+
         public virtual void RasterizeDimensions(ref SizeF size, int rasterWidth, int rasterHeight)
         {
-            if (size.Width == 0)
+            if ((double)size.Width == 0.0)
+            {
                 return;
+            }
 
-            // Ratio of height/width of the original SVG size, to be used for scaling transformation
-            float ratio = size.Height / size.Width;
-
+            var num = size.Height / size.Width;
             size.Width = rasterWidth > 0 ? rasterWidth : size.Width;
             size.Height = rasterHeight > 0 ? rasterHeight : size.Height;
-
             if (rasterHeight == 0 && rasterWidth > 0)
             {
-                size.Height = (int)(rasterWidth * ratio);
+                size.Height = (int)(rasterWidth * (double)num);
             }
-            else if (rasterHeight > 0 && rasterWidth == 0)
+            else
             {
-                size.Width = (int)(rasterHeight / ratio);
+                if (rasterHeight <= 0 || rasterWidth != 0)
+                {
+                    return;
+                }
+
+                size.Width = (int)(rasterHeight / (double)num);
             }
         }
 
-        public override void Write(XmlWriter writer)
+        public override void Write(XmlTextWriter writer)
         {
-            // Save previous culture and switch to invariant for writing
-            var previousCulture = Thread.CurrentThread.CurrentCulture;
+            CultureInfo currentCulture = Thread.CurrentThread.CurrentCulture;
             try
             {
                 Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
@@ -525,44 +552,33 @@ namespace Svg
             }
             finally
             {
-                // Make sure to set back the old culture even an error occurred.
-                // Switch culture back
-                Thread.CurrentThread.CurrentCulture = previousCulture;
+                Thread.CurrentThread.CurrentCulture = currentCulture;
             }
         }
 
         public void Write(Stream stream, bool useBom = true)
         {
-            var settings = new XmlWriterSettings
+            XmlTextWriter writer = new XmlTextWriter(stream, useBom ? Encoding.UTF8 : new UTF8Encoding(false))
             {
-                Encoding = useBom ? Encoding.UTF8 : new UTF8Encoding(false),
-                Indent = true
+                Formatting = (Formatting)1
             };
+            writer.WriteStartDocument();
+            writer.WriteDocType("svg", "-//W3C//DTD SVG 1.1//EN", "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd", null);
+            if (!string.IsNullOrEmpty(ExternalCSSHref))
+            {
+                writer.WriteProcessingInstruction("xml-stylesheet", string.Format("type=\"text/css\" href=\"{0}\"", ExternalCSSHref));
+            }
 
-            using var xmlWriter = XmlWriter.Create(stream, settings);
-            xmlWriter.WriteStartDocument();
-            xmlWriter.WriteDocType("svg", "-//W3C//DTD SVG 1.1//EN", "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd", null);
-
-            if (!string.IsNullOrEmpty(this.ExternalCSSHref))
-                xmlWriter.WriteProcessingInstruction("xml-stylesheet", string.Format("type=\"text/css\" href=\"{0}\"", this.ExternalCSSHref));
-
-            this.Write(xmlWriter);
-
-            xmlWriter.Flush();
+            Write(writer);
+            writer.Flush();
         }
 
         public void Write(string path, bool useBom = true)
         {
-            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+            using (FileStream fileStream = new FileStream(path, (FileMode)2, (FileAccess)2))
             {
-                this.Write(fs, useBom);
+                Write(fileStream, useBom);
             }
-        }
-
-        protected override void WriteAttributes(XmlWriter writer)
-        {
-            writer.WriteAttributeString("version", "1.1");
-            base.WriteAttributes(writer);
         }
     }
 }

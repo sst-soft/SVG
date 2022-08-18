@@ -1,12 +1,12 @@
-﻿using System;
-using System.Collections.Generic;
+﻿// todo: add license
+
 using System.ComponentModel;
-using System.Linq;
+using System.Drawing.Drawing2D;
 
 namespace Svg.Transforms
 {
     [TypeConverter(typeof(SvgTransformConverter))]
-    public partial class SvgTransformCollection : List<SvgTransform>, ICloneable
+    public class SvgTransformCollection : List<SvgTransform>, ICloneable
     {
         private void AddItem(SvgTransform item)
         {
@@ -37,11 +37,22 @@ namespace Svg.Transforms
             OnTransformChanged();
         }
 
+        public Matrix GetMatrix()
+        {
+            Matrix matrix1 = new Matrix();
+            foreach (SvgTransform svgTransform in (List<SvgTransform>)this)
+            {
+                using (Matrix matrix2 = svgTransform.Matrix)
+                {
+                    matrix1.Multiply(matrix2);
+                }
+            }
+            return matrix1;
+        }
+
         public override bool Equals(object obj)
         {
-            if (Count == 0 && Count == base.Count) // default will be an empty list
-                return true;
-            return base.Equals(obj);
+            return Count == 0 && Count == Count || base.Equals(obj);
         }
 
         public override int GetHashCode()
@@ -51,42 +62,52 @@ namespace Svg.Transforms
 
         public new SvgTransform this[int i]
         {
-            get { return base[i]; }
+            get => base[i];
             set
             {
-                var oldVal = base[i];
+                SvgTransform svgTransform1 = base[i];
                 base[i] = value;
-                if (oldVal != value)
-                    OnTransformChanged();
+                SvgTransform svgTransform2 = value;
+                if (!(svgTransform1 != svgTransform2))
+                {
+                    return;
+                }
+
+                OnTransformChanged();
             }
         }
 
-        /// <summary>
-        /// Fired when an SvgTransform has changed
-        /// </summary>
         public event EventHandler<AttributeEventArgs> TransformChanged;
 
         protected void OnTransformChanged()
         {
-            var handler = TransformChanged;
-            if (handler != null)
-                // make a copy of the current value to avoid collection changed exceptions
-                handler(this, new AttributeEventArgs { Attribute = "transform", Value = Clone() });
+            EventHandler<AttributeEventArgs> transformChanged = TransformChanged;
+            if (transformChanged == null)
+            {
+                return;
+            }
+
+            transformChanged(this, new AttributeEventArgs()
+            {
+                Attribute = "transform",
+                Value = Clone()
+            });
         }
 
         public object Clone()
         {
-            var result = new SvgTransformCollection();
-            foreach (var transform in this)
-                 result.AddItem(transform.Clone() as SvgTransform);
-             return result;
+            SvgTransformCollection transformCollection = new SvgTransformCollection();
+            foreach (SvgTransform svgTransform in (List<SvgTransform>)this)
+            {
+                transformCollection.AddItem(svgTransform.Clone() as SvgTransform);
+            }
+
+            return transformCollection;
         }
 
         public override string ToString()
         {
-            if (Count < 1)
-                return string.Empty;
-            return string.Join(" ", (from t in this select t.ToString()).ToArray());
+            return Count < 1 ? string.Empty : this.Select<SvgTransform, string>(t => t.ToString()).Aggregate<string>((p, c) => p + " " + c);
         }
     }
 }

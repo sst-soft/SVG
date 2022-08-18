@@ -1,28 +1,31 @@
-﻿using System;
+﻿// todo: add license
 
 namespace Svg
 {
-    /// <summary>
-    /// Specifies the SVG attribute name of the associated property.
-    /// </summary>
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Event)]
     public class SvgAttributeAttribute : Attribute
     {
-        public const string XLinkNamespace = SvgNamespaces.XLinkNamespace;
-        public const string XmlNamespace = SvgNamespaces.XmlNamespace;
+        public const string SvgNamespace = "http://www.w3.org/2000/svg";
+        public const string XLinkPrefix = "xlink";
+        public const string XLinkNamespace = "http://www.w3.org/1999/xlink";
+        public const string XmlPrefix = "xml";
+        public const string XmlNamespace = "http://www.w3.org/XML/1998/namespace";
+        public static readonly List<KeyValuePair<string, string>> Namespaces = new List<KeyValuePair<string, string>>()
+    {
+      new KeyValuePair<string, string>(string.Empty, "http://www.w3.org/2000/svg"),
+      new KeyValuePair<string, string>("xlink", "http://www.w3.org/1999/xlink"),
+      new KeyValuePair<string, string>("xml", "http://www.w3.org/XML/1998/namespace")
+    };
 
         public override bool Equals(object obj)
         {
             if (!(obj is SvgAttributeAttribute))
+            {
                 return false;
+            }
 
-            var indicator = (SvgAttributeAttribute)obj;
-
-            // Always match if either value is string.Empty (wildcard)
-            if (indicator.Name == string.Empty)
-                return false;
-
-            return string.Equals(Name, indicator.Name);
+            SvgAttributeAttribute attributeAttribute = (SvgAttributeAttribute)obj;
+            return !(attributeAttribute.Name == string.Empty) && string.Equals(Name, attributeAttribute.Name);
         }
 
         public override int GetHashCode()
@@ -30,34 +33,23 @@ namespace Svg
             return base.GetHashCode();
         }
 
-        /// <summary>
-        /// Gets the name of the SVG attribute.
-        /// </summary>
-        public string Name { get; }
+        public string NamespaceAndName => NameSpace == "http://www.w3.org/2000/svg" ? Name : SvgAttributeAttribute.Namespaces.First<KeyValuePair<string, string>>(x => x.Value == NameSpace).Key + ":" + Name;
 
-        /// <summary>
-        /// Gets the namespace of the SVG attribute.
-        /// </summary>
-        public string NameSpace { get; }
+        public string Name { get; private set; }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SvgAttributeAttribute"/> class.
-        /// </summary>
+        public string NameSpace { get; private set; }
+
         internal SvgAttributeAttribute()
-            : this(string.Empty) { }
+        {
+            Name = string.Empty;
+        }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SvgAttributeAttribute"/> class with the specified attribute name.
-        /// </summary>
-        /// <param name="name">The name of the SVG attribute.</param>
         internal SvgAttributeAttribute(string name)
-            : this(name, SvgNamespaces.SvgNamespace) { }
+        {
+            Name = name;
+            NameSpace = "http://www.w3.org/2000/svg";
+        }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SvgAttributeAttribute"/> class with the specified SVG attribute name and namespace.
-        /// </summary>
-        /// <param name="name">The name of the SVG attribute.</param>
-        /// <param name="nameSpace">The namespace of the SVG attribute (e.g. http://www.w3.org/2000/svg).</param>
         public SvgAttributeAttribute(string name, string nameSpace)
         {
             Name = name;

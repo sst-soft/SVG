@@ -1,349 +1,135 @@
-﻿using System;
-using System.Collections.Generic;
+﻿// todo: add license
+
 using System.ComponentModel;
 using System.Globalization;
-using System.Linq;
-using Svg.Helpers;
 
 namespace Svg.Transforms
 {
     public class SvgTransformConverter : TypeConverter
     {
-        private static readonly char[] SplitChars = new[] { ' ', ',' };
-        private const string TranslateTransform = "translate";
-        private const string RotateTransform = "rotate";
-        private const string ScaleTransform = "scale";
-        private const string MatrixTransform = "matrix";
-        private const string ShearTransform = "shear";
-        private const string SkewXTransform = "skewX";
-        private const string SkewYTransform = "skewY";
-
-        private enum TransformType
+        private static IEnumerable<string> SplitTransforms(string transforms)
         {
-            Invalid,
-            Translate,
-            Rotate,
-            Scale,
-            Matrix,
-            Shear,
-            SkewX,
-            SkewY
+            transforms = transforms.Replace(',', ' ');
+            var startIndex = 0;
+            for (var i = 0; i < transforms.Length; ++i)
+            {
+                if (transforms[i] == ')')
+                {
+                    yield return transforms.Substring(startIndex, i + 1 - startIndex).TrimStart();
+                    startIndex = i + 1;
+                }
+            }
         }
 
-        private static TransformType GetTransformType(ref ReadOnlySpan<char> transformName)
+        public override object ConvertFrom(
+          ITypeDescriptorContext context,
+          CultureInfo culture,
+          object value)
         {
-            if (transformName.SequenceEqual(TranslateTransform.AsSpan()))
-            {
-                return TransformType.Translate;
-            }
-            else if (transformName.SequenceEqual(RotateTransform.AsSpan()))
-            {
-                return TransformType.Rotate;
-            }
-            else if (transformName.SequenceEqual(ScaleTransform.AsSpan()))
-            {
-                return TransformType.Scale;
-            }
-            else if (transformName.SequenceEqual(MatrixTransform.AsSpan()))
-            {
-                return TransformType.Matrix;
-            }
-            else if (transformName.SequenceEqual(ShearTransform.AsSpan()))
-            {
-                return TransformType.Shear;
-            }
-            else if (transformName.SequenceEqual(SkewXTransform.AsSpan()))
-            {
-                return TransformType.SkewX;
-            }
-            else if (transformName.SequenceEqual(SkewYTransform.AsSpan()))
-            {
-                return TransformType.SkewY;
-            }
-            return TransformType.Invalid;
-        }
-
-        public static SvgTransformCollection Parse(ReadOnlySpan<char> transform)
-        {
-            var transformList = new SvgTransformCollection();
-            var source = transform.TrimStart();
-            var sourceLength = source.Length;
-            var splitChars = SplitChars.AsSpan();
-
-            while (true)
-            {
-                var currentIndex = 0;
-                var startIndex = source.IndexOf('(');
-                var endIndex = source.IndexOf(')');
-
-                if (startIndex < 0 || endIndex <= startIndex)
-                {
-                    break;
-                }
-
-                var transformName = source.Slice(currentIndex, startIndex - currentIndex).Trim().Trim(',').Trim();
-                var contents = source.Slice(startIndex + 1, endIndex - startIndex - 1).Trim();
-                var parts = new StringSplitEnumerator(contents, splitChars);
-                var transformType = GetTransformType(ref transformName);
-
-                switch (transformType)
-                {
-                    case TransformType.Translate:
-                    {
-                        var count = 0;
-                        var x = default(float);
-                        var y = default(float);
-
-                        foreach (var part in parts)
-                        {
-                            var partValue = part.Value;
-                            if (count == 0)
-                            {
-                                x = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 1)
-                            {
-                                y = StringParser.ToFloat(ref partValue);
-                            }
-
-                            count++;
-                        }
-
-                        if (count == 0 || count > 2)
-                        {
-                            throw new FormatException("Translate transforms must be in the format 'translate(x [y])'");
-                        }
-
-                        transformList.Add(count > 1 ? new SvgTranslate(x, y) : new SvgTranslate(x));
-                    }
-                        break;
-                    case TransformType.Rotate:
-                    {
-                        int count = 0;
-                        var angle = default(float);
-                        var cx = default(float);
-                        var cy = default(float);
-
-                        foreach (var part in parts)
-                        {
-                            var partValue = part.Value;
-                            if (count == 0)
-                            {
-                                angle = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 1)
-                            {
-                                cx = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 2)
-                            {
-                                cy = StringParser.ToFloat(ref partValue);
-                            }
-
-                            count++;
-                        }
-
-                        if (count != 1 && count != 3)
-                        {
-                            throw new FormatException("Rotate transforms must be in the format 'rotate(angle [cx cy])'");
-                        }
-
-                        transformList.Add(count == 1 ? new SvgRotate(angle) : new SvgRotate(angle, cx, cy));
-                    }
-                        break;
-                    case TransformType.Scale:
-                    {
-                        int count = 0;
-                        var sx = default(float);
-                        var sy = default(float);
-
-                        foreach (var part in parts)
-                        {
-                            var partValue = part.Value;
-                            if (count == 0)
-                            {
-                                sx = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 1)
-                            {
-                                sy = StringParser.ToFloat(ref partValue);
-                            }
-
-                            count++;
-                        }
-
-                        if (count == 0 || count > 2)
-                        {
-                            throw new FormatException("Scale transforms must be in the format 'scale(x [y])'");
-                        }
-
-                        transformList.Add(count > 1 ? new SvgScale(sx, sy) : new SvgScale(sx));
-                    }
-                        break;
-                    case TransformType.Matrix:
-                    {
-                        int count = 0;
-                        var m11 = default(float);
-                        var m12 = default(float);
-                        var m21 = default(float);
-                        var m22 = default(float);
-                        var dx = default(float);
-                        var dy = default(float);
-
-                        foreach (var part in parts)
-                        {
-                            var partValue = part.Value;
-                            if (count == 0)
-                            {
-                                m11 = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 1)
-                            {
-                                m12 = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 2)
-                            {
-                                m21 = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 3)
-                            {
-                                m22 = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 4)
-                            {
-                                dx = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 5)
-                            {
-                                dy = StringParser.ToFloat(ref partValue);
-                            }
-
-                            count++;
-                        }
-
-                        if (count != 6)
-                        {
-                            throw new FormatException(
-                                "Matrix transforms must be in the format 'matrix(m11 m12 m21 m22 dx dy)'");
-                        }
-
-                        transformList.Add(new SvgMatrix(new List<float>(6) {m11, m12, m21, m22, dx, dy}));
-                    }
-                        break;
-                    case TransformType.Shear:
-                    {
-                        int count = 0;
-                        var hx = default(float);
-                        var hy = default(float);
-
-                        foreach (var part in parts)
-                        {
-                            var partValue = part.Value;
-                            if (count == 0)
-                            {
-                                hx = StringParser.ToFloat(ref partValue);
-                            }
-                            else if (count == 1)
-                            {
-                                hy = StringParser.ToFloat(ref partValue);
-                            }
-
-                            count++;
-                        }
-
-                        if (count == 0 || count > 2)
-                        {
-                            throw new FormatException("Shear transforms must be in the format 'shear(x [y])'");
-                        }
-
-                        transformList.Add(count > 1 ? new SvgShear(hx, hy) : new SvgShear(hx));
-                    }
-                        break;
-                    case TransformType.SkewX:
-                    {
-                        int count = 0;
-                        var ax = default(float);
-
-                        foreach (var part in parts)
-                        {
-                            var partValue = part.Value;
-                            if (count == 0)
-                            {
-                                ax = StringParser.ToFloat(ref partValue);
-                            }
-
-                            count++;
-                        }
-
-                        if (count != 1)
-                        {
-                            throw new FormatException("SkewX transforms must be in the format 'skewX(a)'");
-                        }
-
-                        transformList.Add(new SvgSkew(ax, 0f));
-                    }
-                        break;
-                    case TransformType.SkewY:
-                    {
-                        int count = 0;
-                        var ay = default(float);
-
-                        foreach (var part in parts)
-                        {
-                            var partValue = part.Value;
-                            if (count == 0)
-                            {
-                                ay = StringParser.ToFloat(ref partValue);
-                            }
-
-                            count++;
-                        }
-
-                        if (count != 1)
-                        {
-                            throw new FormatException("SkewY transforms must be in the format 'skewY(a)'");
-                        }
-
-                        transformList.Add(new SvgSkew(0f, ay));
-                    }
-                        break;
-                }
-
-                currentIndex = endIndex;
-                if (currentIndex + 1 > sourceLength)
-                {
-                    break;
-                }
-
-                source = source.Slice(currentIndex + 1, sourceLength - currentIndex - 1).TrimStart();
-                sourceLength = source.Length;
-                if (sourceLength <= 0)
-                {
-                    break;
-                }
-            }
-
-            return transformList;
-        }
-
-        /// <summary>
-        /// Converts the given object to the type of this converter, using the specified context and culture information.
-        /// </summary>
-        /// <param name="context">An <see cref="T:System.ComponentModel.ITypeDescriptorContext"/> that provides a format context.</param>
-        /// <param name="culture">The <see cref="T:System.Globalization.CultureInfo"/> to use as the current culture.</param>
-        /// <param name="value">The <see cref="T:System.Object"/> to convert.</param>
-        /// <returns>
-        /// An <see cref="T:System.Object"/> that represents the converted value.
-        /// </returns>
-        /// <exception cref="T:System.NotSupportedException">The conversion cannot be performed. </exception>
-        public override object ConvertFrom(ITypeDescriptorContext context, CultureInfo culture, object value)
-        {
-            if (value is not string transform)
+            if (!(value is string))
             {
                 return base.ConvertFrom(context, culture, value);
             }
 
-            return Parse(transform.AsSpan());
+            SvgTransformCollection transformCollection = new SvgTransformCollection();
+            foreach (var splitTransform in SvgTransformConverter.SplitTransforms((string)value))
+            {
+                if (!string.IsNullOrEmpty(splitTransform))
+                {
+                    var strArray1 = splitTransform.Split('(', ')');
+                    var str1 = strArray1[0].TrimEnd();
+                    var s = strArray1[1].Trim();
+                    switch (str1)
+                    {
+                        case "matrix":
+                            var strArray2 = s.Split(new char[1]
+                            {
+                ' '
+                            }, StringSplitOptions.RemoveEmptyEntries);
+                            if (strArray2.Length != 6)
+                            {
+                                throw new FormatException("Matrix transforms must be in the format 'matrix(m11 m12 m21 m22 dx dy)'");
+                            }
+
+                            List<float> m = new List<float>(6);
+                            foreach (var str2 in strArray2)
+                            {
+                                m.Add(float.Parse(str2.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture));
+                            }
+
+                            transformCollection.Add(new SvgMatrix(m));
+                            continue;
+                        case "rotate":
+                            var strArray3 = s.Split(new char[1]
+                            {
+                ' '
+                            }, StringSplitOptions.RemoveEmptyEntries);
+                            var angle = strArray3.Length == 1 || strArray3.Length == 3 ? float.Parse(strArray3[0], NumberStyles.Float, CultureInfo.InvariantCulture) : throw new FormatException("Rotate transforms must be in the format 'rotate(angle [cx cy])'");
+                            if (strArray3.Length == 1)
+                            {
+                                transformCollection.Add(new SvgRotate(angle));
+                                continue;
+                            }
+                            var centerX = float.Parse(strArray3[1], NumberStyles.Float, CultureInfo.InvariantCulture);
+                            var centerY = float.Parse(strArray3[2], NumberStyles.Float, CultureInfo.InvariantCulture);
+                            transformCollection.Add(new SvgRotate(angle, centerX, centerY));
+                            continue;
+                        case "scale":
+                            var strArray4 = s.Split(new char[1]
+                            {
+                ' '
+                            }, StringSplitOptions.RemoveEmptyEntries);
+                            var x1 = strArray4.Length != 0 && strArray4.Length <= 2 ? float.Parse(strArray4[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture) : throw new FormatException("Scale transforms must be in the format 'scale(x [y])'");
+                            if (strArray4.Length > 1)
+                            {
+                                var y = float.Parse(strArray4[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
+                                transformCollection.Add(new SvgScale(x1, y));
+                                continue;
+                            }
+                            transformCollection.Add(new SvgScale(x1));
+                            continue;
+                        case "shear":
+                            var strArray5 = s.Split(new char[1]
+                            {
+                ' '
+                            }, StringSplitOptions.RemoveEmptyEntries);
+                            var x2 = strArray5.Length != 0 && strArray5.Length <= 2 ? float.Parse(strArray5[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture) : throw new FormatException("Shear transforms must be in the format 'shear(x [y])'");
+                            if (strArray5.Length > 1)
+                            {
+                                var y = float.Parse(strArray5[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
+                                transformCollection.Add(new SvgShear(x2, y));
+                                continue;
+                            }
+                            transformCollection.Add(new SvgShear(x2));
+                            continue;
+                        case "skewX":
+                            var x3 = float.Parse(s, NumberStyles.Float, CultureInfo.InvariantCulture);
+                            transformCollection.Add(new SvgSkew(x3, 0.0f));
+                            continue;
+                        case "skewY":
+                            var y1 = float.Parse(s, NumberStyles.Float, CultureInfo.InvariantCulture);
+                            transformCollection.Add(new SvgSkew(0.0f, y1));
+                            continue;
+                        case "translate":
+                            var strArray6 = s.Split(new char[1]
+                            {
+                ' '
+                            }, StringSplitOptions.RemoveEmptyEntries);
+                            var x4 = strArray6.Length != 0 && strArray6.Length <= 2 ? float.Parse(strArray6[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture) : throw new FormatException("Translate transforms must be in the format 'translate(x [y])'");
+                            if (strArray6.Length > 1)
+                            {
+                                var y2 = float.Parse(strArray6[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
+                                transformCollection.Add(new SvgTranslate(x4, y2));
+                                continue;
+                            }
+                            transformCollection.Add(new SvgTranslate(x4));
+                            continue;
+                        default:
+                            continue;
+                    }
+                }
+            }
+            return transformCollection;
         }
 
         public override bool CanConvertFrom(ITypeDescriptorContext context, Type sourceType)
@@ -356,12 +142,13 @@ namespace Svg.Transforms
             return destinationType == typeof(string) || base.CanConvertTo(context, destinationType);
         }
 
-        public override object ConvertTo(ITypeDescriptorContext context, CultureInfo culture, object value, Type destinationType)
+        public override object ConvertTo(
+      ITypeDescriptorContext context,
+      CultureInfo culture,
+      object value,
+      Type destinationType)
         {
-            if (destinationType == typeof(string) && value is SvgTransformCollection collection)
-                return string.Join(" ", collection.Select(t => t.WriteToString()).ToArray());
-
-            return base.ConvertTo(context, culture, value, destinationType);
+            return destinationType == typeof(string) && value is SvgTransformCollection ? string.Join(" ", ((IEnumerable<SvgTransform>)value).Select<SvgTransform, string>(t => t.WriteToString()).ToArray<string>()) : base.ConvertTo(context, culture, value, destinationType);
         }
     }
 }

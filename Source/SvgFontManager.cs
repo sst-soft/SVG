@@ -1,112 +1,47 @@
-﻿#if !NO_SDC
-using System;
-using System.Collections.Generic;
+﻿// todo: add license
+
 using System.Drawing;
 using System.Drawing.Text;
-using System.Linq;
-using System.Runtime.InteropServices;
 
 namespace Svg
 {
-    /// <summary>
-    /// Manages access to <see cref="SystemFonts"/> and any privately loaded fonts.
-    /// When a font is requested in the render process, if the font is not found as an embedded SvgFont, the render
-    /// process will SvgFontManager.FindFont method.
-    /// </summary>
-    public class SvgFontManager : IDisposable
+    public static class SvgFontManager
     {
-        private static readonly string[][] defaultLocalizedFamilyNames = new string[][]
+        private static readonly Dictionary<string, FontFamily> SystemFonts = FontFamily.Families.GroupBy<FontFamily, string>(ff => ff.Name.ToLower()).ToDictionary<IGrouping<string, FontFamily>, string, FontFamily>(x => x.Key, x => x.First<FontFamily>());
+        public static Func<string, FontFamily> FontLoaderCallback;
+
+        public static FontFamily LoadFontFamily(string path)
         {
-            // Japanese
-            new string[]{ "Meiryo", "メイリオ", },
-            new string[]{ "MS Gothic", "ＭＳ ゴシック", },
-            new string[]{ "MS Mincho", "ＭＳ 明朝", },
-        };
-
-        public static List<string[]> LocalizedFamilyNames { get; private set; } = new List<string[]>();
-
-        public static List<string> PrivateFontPathList { get; private set; } = new List<string>();
-
-        public static List<byte[]> PrivateFontDataList { get; private set; } = new List<byte[]>();
-
-        private readonly List<FontFamily> families = new List<FontFamily>();
-
-        private readonly List<string[]> localizedFamilyNames = new List<string[]>();
-
-        internal SvgFontManager()
-        {
-            families.AddRange(FontFamily.Families);
-
-#if !NETSTANDARD
-            using (var privateFontCollection = new PrivateFontCollection())
-            {
-                foreach (var path in PrivateFontPathList)
-                    privateFontCollection.AddFontFile(path);
-
-                foreach (var data in PrivateFontDataList)
-                {
-                    var memory = IntPtr.Zero;
-                    try
-                    {
-                        memory = Marshal.AllocCoTaskMem(data.Length);
-                        Marshal.Copy(data, 0, memory, data.Length);
-                        privateFontCollection.AddMemoryFont(memory, data.Length);
-                    }
-                    finally
-                    {
-                        if (memory != IntPtr.Zero)
-                            Marshal.FreeCoTaskMem(memory);
-                    }
-                }
-
-                families.AddRange(privateFontCollection.Families);
-            }
-#endif
-
-            localizedFamilyNames.AddRange(LocalizedFamilyNames);
-            localizedFamilyNames.AddRange(defaultLocalizedFamilyNames);
+            PrivateFontCollection privateFontCollection = new PrivateFontCollection();
+            var fullPath = Path.GetFullPath(path);
+            privateFontCollection.AddFontFile(fullPath);
+            return privateFontCollection.Families.Length != 0 ? privateFontCollection.Families[0] : null;
         }
 
-        /// <summary>
-        /// This method searches a dictionary of fonts (pre loaded with the system fonts). If a
-        /// font can't be found and a callback has been provided - then the callback should perform
-        /// any validation and return a font (or null if not found/error).
-        /// Where a font can't be located it is the responsibility of the caller to perform any
-        /// exception handling.
-        /// </summary>
-        /// <param name="name">A <see cref="string"/> containing the FamilyName of the font.</param>
-        /// <returns>An <see cref="FontFamily"/> of the loaded font or null is not located.</returns>
-        public FontFamily FindFont(string name)
+        public static FontFamily FindFont(string name)
         {
             if (name == null)
+            {
                 return null;
-
-            var familyNames = localizedFamilyNames.Where(f => f.Contains(name, StringComparer.CurrentCultureIgnoreCase)).FirstOrDefault()
-                ?? Enumerable.Repeat(name, 1);
-            foreach (var familyName in familyNames)
-            {
-                var family = families.Where(f => f.Name.Equals(familyName, StringComparison.CurrentCultureIgnoreCase)).FirstOrDefault();
-                if (family != null)
-                    return family;
             }
 
-            switch (name.ToLower())
+            if (SvgFontManager.SystemFonts.TryGetValue(name.ToLower(), out FontFamily font1))
             {
-                case "serif":
-                    return FontFamily.GenericSerif;
-                case "sans-serif":
-                    return FontFamily.GenericSansSerif;
-                case "monospace":
-                    return FontFamily.GenericMonospace;
+                return font1;
             }
 
-            return null;
-        }
+            if (SvgFontManager.FontLoaderCallback == null)
+            {
+                return null;
+            }
 
-        public void Dispose()
-        {
-            families.ForEach(f => f.Dispose());
+            FontFamily font2 = SvgFontManager.FontLoaderCallback(name);
+            if (font2 != null)
+            {
+                SvgFontManager.SystemFonts.Add(name.ToLower(), font2);
+            }
+
+            return font2;
         }
     }
 }
-#endif

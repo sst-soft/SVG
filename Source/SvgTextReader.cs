@@ -1,115 +1,114 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
+﻿// todo: add license
+
 using System.Xml;
 
 namespace Svg
 {
-    internal sealed class SvgTextReader : XmlTextReader
+    internal class SvgTextReader : XmlTextReader
     {
-        private readonly Dictionary<string, string> _entities;
+        private Dictionary<string, string> _entities;
         private string _value;
-        private bool _customValue = false;
+        private bool _customValue;
+        private string _localName;
 
         public SvgTextReader(Stream stream, Dictionary<string, string> entities)
-            : base(stream)
+          : base(stream)
         {
-            if (entities == null)
-                EntityHandling = EntityHandling.ExpandEntities;
-            _entities = entities ?? new Dictionary<string, string>();
+            EntityHandling = (EntityHandling)1;
+            _entities = entities;
         }
 
         public SvgTextReader(TextReader reader, Dictionary<string, string> entities)
-            : base(reader)
+          : base(reader)
         {
-            if (entities == null)
-                EntityHandling = EntityHandling.ExpandEntities;
-            _entities = entities ?? new Dictionary<string, string>();
+            EntityHandling = (EntityHandling)1;
+            _entities = entities;
         }
 
-        /// <summary>
-        /// Gets the text value of the current node.
-        /// </summary>
-        /// <value></value>
-        /// <returns>The value returned depends on the <see cref="P:System.Xml.XmlTextReader.NodeType"/> of the node. The following table lists node types that have a value to return. All other node types return String.Empty.Node Type Value AttributeThe value of the attribute. CDATAThe content of the CDATA section. CommentThe content of the comment. DocumentTypeThe internal subset. ProcessingInstructionThe entire content, excluding the target. SignificantWhitespaceThe white space within an xml:space= 'preserve' scope. TextThe content of the text node. WhitespaceThe white space between markup. XmlDeclarationThe content of the declaration. </returns>
-        public override string Value
+        public override string Value => !_customValue ? base.Value : _value;
+
+        public override string LocalName => !_customValue ? base.LocalName : _localName;
+
+        private IDictionary<string, string> Entities
         {
-            get { return _customValue ? _value : base.Value; }
+            get
+            {
+                if (_entities == null)
+                {
+                    _entities = new Dictionary<string, string>();
+                }
+
+                return _entities;
+            }
         }
 
-        /// <summary>
-        /// Reads the attribute.
-        /// </summary>
-        /// <returns>
-        /// true if there is a attribute value; false if there are no attribute value.
-        /// </returns>
-        public override bool ReadAttributeValue()
+        public override bool MoveToNextAttribute()
         {
-            _customValue = false;
-            var read = base.ReadAttributeValue();
+            var num = base.MoveToNextAttribute() ? 1 : 0;
+            if (num == 0)
+            {
+                return num != 0;
+            }
 
-            if (read && NodeType == XmlNodeType.EntityReference)
-                ResolveEntity();
-            return read;
+            _localName = base.LocalName;
+            if (ReadAttributeValue())
+            {
+                if (NodeType == XmlNodeType.EntityReference)
+                {
+                    ResolveEntity();
+                }
+                else
+                {
+                    _value = base.Value;
+                }
+            }
+            _customValue = true;
+            return num != 0;
         }
 
-        /// <summary>
-        /// Reads the next node from the stream.
-        /// </summary>
-        /// <returns>
-        /// true if the next node was read successfully; false if there are no more nodes to read.
-        /// </returns>
-        /// <exception cref="T:System.Xml.XmlException">An error occurred while parsing the XML. </exception>
         public override bool Read()
         {
             _customValue = false;
-            bool read = base.Read();
+            var num = base.Read() ? 1 : 0;
+            if (NodeType != XmlNodeType.DocumentType)
+            {
+                return num != 0;
+            }
 
-            if (NodeType == XmlNodeType.DocumentType)
-                ParseEntities();
-
-            return read;
+            ParseEntities();
+            return num != 0;
         }
 
         private void ParseEntities()
         {
-            const string entityText = "<!ENTITY";
-            var entities = Value.Split(new string[] { entityText }, StringSplitOptions.None);
-
-            foreach (var entity in entities)
+            var strArray = Value.Split(new string[1]
             {
-                if (string.IsNullOrEmpty(entity.Trim()))
-                    continue;
-
-                var name = entity.Trim();
-                var quoteIndex = name.IndexOf(QuoteChar);
-                if (quoteIndex > 0)
+        "<!ENTITY"
+            }, StringSplitOptions.None);
+            foreach (var str1 in strArray)
+            {
+                if (!string.IsNullOrEmpty(str1.Trim()))
                 {
-                    var value = name.Substring(quoteIndex + 1, name.LastIndexOf(QuoteChar) - quoteIndex - 1);
-                    name = name.Substring(0, quoteIndex).Trim();
-                    _entities.Add(name, value);
+                    var str2 = str1.Trim();
+                    var length = str2.IndexOf(QuoteChar);
+                    if (length > 0)
+                    {
+                        var str3 = str2.Substring(length + 1, str2.LastIndexOf(QuoteChar) - length - 1);
+                        Entities.Add(str2.Substring(0, length).Trim(), str3);
+                    }
                 }
             }
         }
 
-        /// <summary>
-        /// Resolves the entity reference for EntityReference nodes.
-        /// </summary>
         public override void ResolveEntity()
         {
-            if (NodeType == XmlNodeType.EntityReference)
+            if (NodeType != XmlNodeType.EntityReference)
             {
-                if (_entities.ContainsKey(Name))
-                {
-                    _value = _entities[Name];
-                }
-                else
-                {
-                    _value = string.Empty;
-                }
-
-                _customValue = true;
+                return;
             }
+
+            _value = !_entities.ContainsKey(Name) ? string.Empty : _entities[Name];
+            _customValue = true;
         }
     }
 }

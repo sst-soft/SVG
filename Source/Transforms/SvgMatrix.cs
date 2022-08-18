@@ -1,17 +1,19 @@
-﻿using System.Collections.Generic;
+﻿// todo: add license
+
+using System.Drawing.Drawing2D;
+using System.Globalization;
 
 namespace Svg.Transforms
 {
-    /// <summary>
-    /// The class which applies custom transform to this Matrix (Required for projects created by the Inkscape).
-    /// </summary>
-    public sealed partial class SvgMatrix : SvgTransform
+    public sealed class SvgMatrix : SvgTransform
     {
         public List<float> Points { get; set; }
 
+        public override Matrix Matrix => new Matrix(Points[0], Points[1], Points[2], Points[3], Points[4], Points[5]);
+
         public override string WriteToString()
         {
-            return $"matrix({Points[0].ToSvgString()}, {Points[1].ToSvgString()}, {Points[2].ToSvgString()}, {Points[3].ToSvgString()}, {Points[4].ToSvgString()}, {Points[5].ToSvgString()})";
+            return string.Format(CultureInfo.InvariantCulture, "matrix({0}, {1}, {2}, {3}, {4}, {5})", Points[0], Points[1], Points[2], Points[3], Points[4], Points[5]);
         }
 
         public SvgMatrix(List<float> m)

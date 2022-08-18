@@ -1,6 +1,8 @@
+﻿// todo: add license
+
 namespace Svg
 {
-    public partial class SvgUnknownElement : SvgElement
+    public class SvgUnknownElement : SvgElement
     {
         public SvgUnknownElement()
         {

@@ -1,6 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿// todo: add license
+
 using Fizzler;
 
 namespace Svg.Css
@@ -9,175 +8,138 @@ namespace Svg.Css
     {
         private readonly SvgElementFactory _elementFactory;
 
-        public SvgElementOps(SvgElementFactory elementFactory)
-        {
-            _elementFactory = elementFactory;
-        }
+        public SvgElementOps(SvgElementFactory elementFactory) => this._elementFactory = elementFactory;
 
         public Selector<SvgElement> Type(NamespacePrefix prefix, string name)
         {
-            if (_elementFactory.AvailableElementsDictionary.TryGetValue(name, out var types))
+            SvgElementFactory.ElementInfo type = (SvgElementFactory.ElementInfo)null;
+            return this._elementFactory.AvailableElements.TryGetValue(name, out type) ? (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.GetType() == type.ElementType))) : (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>());
+        }
+
+        public Selector<SvgElement> Universal(NamespacePrefix prefix) => (Selector<SvgElement>)(nodes => nodes);
+
+        public Selector<SvgElement> Id(string id) => (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.ID == id)));
+
+        public Selector<SvgElement> Class(string clazz) => this.AttributeIncludes(NamespacePrefix.None, "class", clazz);
+
+        public Selector<SvgElement> AttributeExists(
+          NamespacePrefix prefix,
+          string name)
+        {
+            return (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.ContainsAttribute(name))));
+        }
+
+        public Selector<SvgElement> AttributeExact(
+          NamespacePrefix prefix,
+          string name,
+          string value)
+        {
+            return (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n =>
             {
-                return nodes => nodes.Where(n => types.Contains(n.GetType()));
-            }
-            return nodes => Enumerable.Empty<SvgElement>();
+                string str = (string)null;
+                return n.TryGetAttribute(name, out str) && str == value;
+            })));
         }
 
-        public Selector<SvgElement> Universal(NamespacePrefix prefix)
+        public Selector<SvgElement> AttributeIncludes(
+          NamespacePrefix prefix,
+          string name,
+          string value)
         {
-            return nodes => nodes;
-        }
-
-        public Selector<SvgElement> Id(string id)
-        {
-            return nodes => nodes.Where(n => n.ID == id);
-        }
-
-        public Selector<SvgElement> Class(string clazz)
-        {
-            return AttributeIncludes(NamespacePrefix.None, "class", clazz);
-        }
-
-        public Selector<SvgElement> AttributeExists(NamespacePrefix prefix, string name)
-        {
-            return nodes => nodes.Where(n => n.ContainsAttribute(name));
-        }
-
-        public Selector<SvgElement> AttributeExact(NamespacePrefix prefix, string name, string value)
-        {
-            return nodes => nodes.Where(n =>
+            return (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n =>
             {
-                string val = null;
-                return (n.TryGetAttribute(name, out val) && val == value);
-            });
+                string str = (string)null;
+                return n.TryGetAttribute(name, out str) && ((IEnumerable<string>)str.Split(' ', StringSplitOptions.None)).Contains<string>(value);
+            })));
         }
 
-        public Selector<SvgElement> AttributeIncludes(NamespacePrefix prefix, string name, string value)
+        public Selector<SvgElement> AttributeDashMatch(
+          NamespacePrefix prefix,
+          string name,
+          string value)
         {
-            return nodes => nodes.Where(n =>
+            return !string.IsNullOrEmpty(value) ? (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n =>
             {
-                string val = null;
-                return (n.TryGetAttribute(name, out val) && val.Split(' ').Contains(value));
-            });
+                string str = (string)null;
+                return n.TryGetAttribute(name, out str) && ((IEnumerable<string>)str.Split('-', StringSplitOptions.None)).Contains<string>(value);
+            }))) : (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>());
         }
 
-        public Selector<SvgElement> AttributeDashMatch(NamespacePrefix prefix, string name, string value)
+        public Selector<SvgElement> AttributePrefixMatch(
+          NamespacePrefix prefix,
+          string name,
+          string value)
         {
-            return string.IsNullOrEmpty(value)
-                 ? (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>())
-                 : (nodes => nodes.Where(n =>
-                    {
-                        string val = null;
-                        return (n.TryGetAttribute(name, out val) && val.Split('-').Contains(value));
-                    }));
+            return !string.IsNullOrEmpty(value) ? (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n =>
+            {
+                string str = (string)null;
+                return n.TryGetAttribute(name, out str) && str.StartsWith(value);
+            }))) : (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>());
         }
 
-        public Selector<SvgElement> AttributePrefixMatch(NamespacePrefix prefix, string name, string value)
+        public Selector<SvgElement> AttributeSuffixMatch(
+          NamespacePrefix prefix,
+          string name,
+          string value)
         {
-            return string.IsNullOrEmpty(value)
-                 ? (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>())
-                 : (nodes => nodes.Where(n =>
-                     {
-                         string val = null;
-                         return (n.TryGetAttribute(name, out val) && val.StartsWith(value));
-                     }));
+            return !string.IsNullOrEmpty(value) ? (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n =>
+            {
+                string str = (string)null;
+                return n.TryGetAttribute(name, out str) && str.EndsWith(value);
+            }))) : (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>());
         }
 
-        public Selector<SvgElement> AttributeSuffixMatch(NamespacePrefix prefix, string name, string value)
+        public Selector<SvgElement> AttributeSubstring(
+          NamespacePrefix prefix,
+          string name,
+          string value)
         {
-            return string.IsNullOrEmpty(value)
-                 ? (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>())
-                 : (nodes => nodes.Where(n =>
-                 {
-                     string val = null;
-                     return (n.TryGetAttribute(name, out val) && val.EndsWith(value));
-                 }));
+            return !string.IsNullOrEmpty(value) ? (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n =>
+            {
+                string str = (string)null;
+                return n.TryGetAttribute(name, out str) && str.Contains(value);
+            }))) : (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>());
         }
 
-        public Selector<SvgElement> AttributeSubstring(NamespacePrefix prefix, string name, string value)
-        {
-            return string.IsNullOrEmpty(value)
-                 ? (Selector<SvgElement>)(nodes => Enumerable.Empty<SvgElement>())
-                 : (nodes => nodes.Where(n =>
-                 {
-                     string val = null;
-                     return (n.TryGetAttribute(name, out val) && val.Contains(value));
-                 }));
-        }
+        public Selector<SvgElement> FirstChild() => (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.Parent == null || n.Parent.Children.First<SvgElement>() == n)));
 
-        public Selector<SvgElement> FirstChild()
-        {
-            return nodes => nodes.Where(n => n.Parent == null || n.Parent.Children.First() == n);
-        }
-
-        public Selector<SvgElement> LastChild()
-        {
-            return nodes => nodes.Where(n => n.Parent == null || n.Parent.Children.Last() == n);
-        }
+        public Selector<SvgElement> LastChild() => (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.Parent == null || n.Parent.Children.Last<SvgElement>() == n)));
 
         private IEnumerable<T> GetByIds<T>(IList<T> items, IEnumerable<int> indices)
         {
-            foreach (var i in indices)
+            foreach (int index in indices)
             {
-                if (i >= 0 && i < items.Count) yield return items[i];
+                if (index >= 0 && index < ((ICollection<T>)items).Count)
+                    yield return items[index];
             }
         }
 
-        public Selector<SvgElement> NthChild(int a, int b)
-        {
-            return nodes => nodes.Where(n => n.Parent != null && GetByIds(n.Parent.Children, (from i in Enumerable.Range(0, n.Parent.Children.Count / a) select a * i + b)).Contains(n));
-        }
+        public Selector<SvgElement> NthChild(int a, int b) => (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.Parent != null && this.GetByIds<SvgElement>((IList<SvgElement>)n.Parent.Children, Enumerable.Range(0, n.Parent.Children.Count / a).Select<int, int>((Func<int, int>)(i => a * i + b))).Contains<SvgElement>(n))));
 
-        public Selector<SvgElement> OnlyChild()
-        {
-            return nodes => nodes.Where(n => n.Parent == null || n.Parent.Children.Count == 1);
-        }
+        public Selector<SvgElement> OnlyChild() => (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.Parent == null || n.Parent.Children.Count == 1)));
 
-        public Selector<SvgElement> Empty()
-        {
-            return nodes => nodes.Where(n => n.Children.Count == 0);
-        }
+        public Selector<SvgElement> Empty() => (Selector<SvgElement>)(nodes => nodes.Where<SvgElement>((Func<SvgElement, bool>)(n => n.Children.Count == 0)));
 
-        public Selector<SvgElement> Child()
-        {
-            return nodes => nodes.SelectMany(n => n.Children);
-        }
+        public Selector<SvgElement> Child() => (Selector<SvgElement>)(nodes => nodes.SelectMany<SvgElement, SvgElement>((Func<SvgElement, IEnumerable<SvgElement>>)(n => (IEnumerable<SvgElement>)n.Children)));
 
-        public Selector<SvgElement> Descendant()
-        {
-            return nodes => nodes.SelectMany(n => Descendants(n));
-        }
+        public Selector<SvgElement> Descendant() => (Selector<SvgElement>)(nodes => nodes.SelectMany<SvgElement, SvgElement>((Func<SvgElement, IEnumerable<SvgElement>>)(n => this.Descendants(n))));
 
         private IEnumerable<SvgElement> Descendants(SvgElement elem)
         {
-            foreach (var child in elem.Children)
+            foreach (SvgElement child in elem.Children)
             {
                 yield return child;
-                foreach (var descendant in child.Descendants())
-                {
+                foreach (SvgElement descendant in child.Descendants())
                     yield return descendant;
-                }
             }
         }
 
-        public Selector<SvgElement> Adjacent()
-        {
-            return nodes => nodes.SelectMany(n => ElementsAfterSelf(n).Take(1));
-        }
+        public Selector<SvgElement> Adjacent() => (Selector<SvgElement>)(nodes => nodes.SelectMany<SvgElement, SvgElement>((Func<SvgElement, IEnumerable<SvgElement>>)(n => this.ElementsAfterSelf(n).Take<SvgElement>(1))));
 
-        public Selector<SvgElement> GeneralSibling()
-        {
-            return nodes => nodes.SelectMany(n => ElementsAfterSelf(n));
-        }
+        public Selector<SvgElement> GeneralSibling() => (Selector<SvgElement>)(nodes => nodes.SelectMany<SvgElement, SvgElement>((Func<SvgElement, IEnumerable<SvgElement>>)(n => this.ElementsAfterSelf(n))));
 
-        private IEnumerable<SvgElement> ElementsAfterSelf(SvgElement self)
-        {
-            return (self.Parent == null ? Enumerable.Empty<SvgElement>() : self.Parent.Children.Skip(self.Parent.Children.IndexOf(self) + 1));
-        }
+        private IEnumerable<SvgElement> ElementsAfterSelf(SvgElement self) => self.Parent != null ? self.Parent.Children.Skip<SvgElement>(self.Parent.Children.IndexOf(self) + 1) : Enumerable.Empty<SvgElement>();
 
-        public Selector<SvgElement> NthLastChild(int a, int b)
-        {
-            throw new NotImplementedException();
-        }
+        public Selector<SvgElement> NthLastChild(int a, int b) => throw new NotImplementedException();
     }
 }

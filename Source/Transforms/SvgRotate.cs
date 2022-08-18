@@ -1,6 +1,11 @@
+﻿// todo: add license
+
+using System.Drawing.Drawing2D;
+using System.Globalization;
+
 namespace Svg.Transforms
 {
-    public sealed partial class SvgRotate : SvgTransform
+    public sealed class SvgRotate : SvgTransform
     {
         public float Angle { get; set; }
 
@@ -8,9 +13,21 @@ namespace Svg.Transforms
 
         public float CenterY { get; set; }
 
+        public override Matrix Matrix
+        {
+            get
+            {
+                Matrix matrix = new Matrix();
+                matrix.Translate(CenterX, CenterY);
+                matrix.Rotate(Angle);
+                matrix.Translate(-CenterX, -CenterY);
+                return matrix;
+            }
+        }
+
         public override string WriteToString()
         {
-            return $"rotate({Angle.ToSvgString()}, {CenterX.ToSvgString()}, {CenterY.ToSvgString()})";
+            return string.Format(CultureInfo.InvariantCulture, "rotate({0}, {1}, {2})", Angle, CenterX, CenterY);
         }
 
         public SvgRotate(float angle)
@@ -19,7 +36,7 @@ namespace Svg.Transforms
         }
 
         public SvgRotate(float angle, float centerX, float centerY)
-            : this(angle)
+      : this(angle)
         {
             CenterX = centerX;
             CenterY = centerY;

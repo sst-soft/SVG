@@ -1,71 +1,59 @@
-﻿using System;
-using System.Collections.Generic;
+﻿// todo: add license
+
 using System.Drawing;
 using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Threading;
 using System.Xml;
 
 namespace Svg
 {
-    /// <summary>
-    /// Svg helpers
-    /// </summary>
     public static class SvgExtentions
     {
         public static void SetRectangle(this SvgRectangle r, RectangleF bounds)
         {
-            r.X = bounds.X;
-            r.Y = bounds.Y;
-            r.Width = bounds.Width;
-            r.Height = bounds.Height;
+            r.X = (SvgUnit)bounds.X;
+            r.Y = (SvgUnit)bounds.Y;
+            r.Width = (SvgUnit)bounds.Width;
+            r.Height = (SvgUnit)bounds.Height;
         }
-#if !NO_SDC
+
         public static RectangleF GetRectangle(this SvgRectangle r)
         {
-            return new RectangleF(r.X, r.Y, r.Width, r.Height);
+            return new RectangleF((float)r.X, (float)r.Y, (float)r.Width, (float)r.Height);
         }
-#endif
+
         public static string GetXML(this SvgDocument doc)
         {
-            var ret = string.Empty;
-
-            using (var ms = new MemoryStream())
+            var xml = "";
+            using (MemoryStream memoryStream = new MemoryStream())
             {
-                doc.Write(ms);
-                ms.Position = 0;
-                using (var sr = new StreamReader(ms))
-                    ret = sr.ReadToEnd();
+                doc.Write(memoryStream);
+                memoryStream.Position = 0L;
+                StreamReader streamReader = new StreamReader(memoryStream);
+                xml = streamReader.ReadToEnd();
+                streamReader.Close();
             }
-
-            return ret;
+            return xml;
         }
 
         public static string GetXML(this SvgElement elem)
         {
-            var result = string.Empty;
-
-            var currentCulture = Thread.CurrentThread.CurrentCulture;
+            CultureInfo currentCulture = Thread.CurrentThread.CurrentCulture;
             try
             {
                 Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-
-                var writerSettings = new XmlWriterSettings { Encoding = System.Text.Encoding.UTF8 };
-
-                using var str = new StringWriter();
-                using var xml = XmlWriter.Create(str, writerSettings);
-                elem.Write(xml);
-                xml.Flush();
-                result = str.ToString();
+                using (StringWriter stringWriter = new StringWriter())
+                {
+                    using (XmlTextWriter writer = new XmlTextWriter(stringWriter))
+                    {
+                        elem.Write(writer);
+                        return stringWriter.ToString();
+                    }
+                }
             }
             finally
             {
-                // Make sure to set back the old culture even an error occurred.
                 Thread.CurrentThread.CurrentCulture = currentCulture;
             }
-
-            return result;
         }
 
         public static bool HasNonEmptyCustomAttribute(this SvgElement element, string name)
@@ -75,50 +63,78 @@ namespace Svg
 
         public static void ApplyRecursive(this SvgElement elem, Action<SvgElement> action)
         {
-            foreach (var e in elem.Traverse(e => e.Children))
-                action(e);
+            foreach (SvgElement svgElement in elem.Traverse<SvgElement>(e => e.Children))
+            {
+                action(svgElement);
+            }
         }
 
         public static void ApplyRecursiveDepthFirst(this SvgElement elem, Action<SvgElement> action)
         {
-            foreach (var e in elem.TraverseDepthFirst(e => e.Children))
-                action(e);
+            foreach (SvgElement svgElement in elem.TraverseDepthFirst<SvgElement>(e => e.Children))
+            {
+                action(svgElement);
+            }
         }
 
-        internal static IEnumerable<T> Traverse<T>(this IEnumerable<T> items, Func<T, IEnumerable<T>> childrenSelector)
+        public static IEnumerable<T> Traverse<T>(
+          this IEnumerable<T> items,
+          Func<T, IEnumerable<T>> childrenSelector)
         {
             if (childrenSelector == null)
+            {
                 throw new ArgumentNullException(nameof(childrenSelector));
+            }
 
-            var itemQueue = new Queue<T>(items);
+            Queue<T> itemQueue = new Queue<T>(items);
             while (itemQueue.Count > 0)
             {
-                var current = itemQueue.Dequeue();
+                T current = itemQueue.Dequeue();
                 yield return current;
-                foreach (var child in childrenSelector(current) ?? Enumerable.Empty<T>())
-                    itemQueue.Enqueue(child);
+                foreach (T obj in childrenSelector(current) ?? Enumerable.Empty<T>())
+                {
+                    itemQueue.Enqueue(obj);
+                }
+
+                current = default(T);
             }
         }
 
-        internal static IEnumerable<T> Traverse<T>(this T root, Func<T, IEnumerable<T>> childrenSelector)
-            => Enumerable.Repeat(root, 1).Traverse(childrenSelector);
+        public static IEnumerable<T> Traverse<T>(
+          this T root,
+          Func<T, IEnumerable<T>> childrenSelector)
+        {
+            return Enumerable.Repeat<T>(root, 1).Traverse<T>(childrenSelector);
+        }
 
-        internal static IEnumerable<T> TraverseDepthFirst<T>(this IEnumerable<T> items, Func<T, IEnumerable<T>> childrenSelector)
+        public static IEnumerable<T> TraverseDepthFirst<T>(
+          this IEnumerable<T> items,
+          Func<T, IEnumerable<T>> childrenSelector)
         {
             if (childrenSelector == null)
+            {
                 throw new ArgumentNullException(nameof(childrenSelector));
+            }
 
-            var itemStack = new Stack<T>(items ?? Enumerable.Empty<T>());
+            Stack<T> itemStack = new Stack<T>(items ?? Enumerable.Empty<T>());
             while (itemStack.Count > 0)
             {
-                var current = itemStack.Pop();
+                T current = itemStack.Pop();
                 yield return current;
-                foreach (var child in childrenSelector(current) ?? Enumerable.Empty<T>())
-                    itemStack.Push(child);
+                foreach (T obj in childrenSelector(current) ?? Enumerable.Empty<T>())
+                {
+                    itemStack.Push(obj);
+                }
+
+                current = default(T);
             }
         }
 
-        internal static IEnumerable<T> TraverseDepthFirst<T>(this T root, Func<T, IEnumerable<T>> childrenSelector)
-            => Enumerable.Repeat(root, 1).TraverseDepthFirst(childrenSelector);
+        public static IEnumerable<T> TraverseDepthFirst<T>(
+          this T root,
+          Func<T, IEnumerable<T>> childrenSelector)
+        {
+            return Enumerable.Repeat<T>(root, 1).TraverseDepthFirst<T>(childrenSelector);
+        }
     }
 }

@@ -1,53 +1,72 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿// todo: add license
 
 namespace Svg
 {
     public static class Extensions
     {
-        public static IEnumerable<SvgElement> Descendants<T>(this IEnumerable<T> source) where T : SvgElement
+        public static IEnumerable<SvgElement> Descendants<T>(
+          this IEnumerable<T> source)
+          where T : SvgElement
         {
-            if (source == null) throw new ArgumentNullException("source");
-
-            return GetDescendants<T>(source, false);
+            return source != null ? Extensions.GetDescendants<T>(source, false) : throw new ArgumentNullException(nameof(source));
         }
 
-        private static IEnumerable<SvgElement> GetAncestors<T>(IEnumerable<T> source, bool self) where T : SvgElement
+        private static IEnumerable<SvgElement> GetAncestors<T>(
+          IEnumerable<T> source,
+          bool self)
+          where T : SvgElement
         {
-            foreach (var start in source)
+            foreach (T obj in source)
             {
-                if (start != null)
+                if (obj != null)
                 {
-                    for (var elem = (self ? start : start.Parent) as SvgElement; elem != null; elem = (elem.Parent as SvgElement))
+                    SvgElement elem;
+                    for (elem = self ? obj : obj.Parent; elem != null; elem = elem.Parent)
                     {
                         yield return elem;
                     }
+
+                    elem = null;
                 }
             }
-            yield break;
         }
 
-        private static IEnumerable<SvgElement> GetDescendants<T>(IEnumerable<T> source, bool self) where T : SvgElement
+        private static IEnumerable<SvgElement> GetDescendants<T>(
+          IEnumerable<T> source,
+          bool self)
+          where T : SvgElement
         {
-            foreach (var top in source)
+            Stack<int> positons = new Stack<int>();
+            foreach (T obj in source)
             {
-                if (top == null)
-                    continue;
-
-                if (self)
-                    yield return top;
-
-                var elements = new Stack<SvgElement>(top.Children.Reverse());
-                while (elements.Count > 0)
+                T start = obj;
+                if (start != null)
                 {
-                    var element = elements.Pop();
-                    yield return element;
-                    foreach (var e in element.Children.Reverse())
-                        elements.Push(e);
+                    if (self)
+                    {
+                        yield return start;
+                    }
+
+                    positons.Push(0);
+                    SvgElement currParent = start;
+                    while (positons.Count > 0)
+                    {
+                        var currPos = positons.Pop();
+                        if (currPos < currParent.Children.Count)
+                        {
+                            yield return currParent.Children[currPos];
+                            currParent = currParent.Children[currPos];
+                            positons.Push(currPos + 1);
+                            positons.Push(0);
+                        }
+                        else
+                        {
+                            currParent = currParent.Parent;
+                        }
+                    }
                 }
+                start = default(T);
             }
-            yield break;
         }
     }
 }

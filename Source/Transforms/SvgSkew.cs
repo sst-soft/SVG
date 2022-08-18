@@ -1,19 +1,29 @@
-﻿namespace Svg.Transforms
+﻿// todo: add license
+
+using System.Drawing.Drawing2D;
+using System.Globalization;
+
+namespace Svg.Transforms
 {
-    /// <summary>
-    /// The class which applies the specified skew vector to this Matrix.
-    /// </summary>
-    public sealed partial class SvgSkew : SvgTransform
+    public sealed class SvgSkew : SvgTransform
     {
         public float AngleX { get; set; }
 
         public float AngleY { get; set; }
 
+        public override Matrix Matrix
+        {
+            get
+            {
+                Matrix matrix = new Matrix();
+                matrix.Shear((float)Math.Tan((double)AngleX / 180.0 * Math.PI), (float)Math.Tan((double)AngleY / 180.0 * Math.PI));
+                return matrix;
+            }
+        }
+
         public override string WriteToString()
         {
-            if (AngleY == 0f)
-                return $"skewX({AngleX.ToSvgString()})";
-            return $"skewY({AngleY.ToSvgString()})";
+            return (double)AngleY == 0.0 ? string.Format(CultureInfo.InvariantCulture, "skewX({0})", AngleX) : string.Format(CultureInfo.InvariantCulture, "skewY({0})", AngleY);
         }
 
         public SvgSkew(float x, float y)
