@@ -6,7 +6,14 @@ This fork was created, to build a **very** stripped down version with only **.NE
 There will be *no* active development on this fork, other than merging from underlying respositories. For more complex implementation, please visit the relevant forks instead.
 Only use this fork, if you know what you are doing! You have been warned :-)
 
-The SVG project has dependencies to other open source projects (Fizzler and ExCSS). Both are referenced as submodules. Be aware that they have different license requirements!
+This project has dependencies on other open-source projects. You may want to use the projects below, that are also stripped-down versions and only support *.NET6*. If you are interested in the original code, please follow the relevant links.
+**Be aware that these projects might be subject to different licenses.**
+
+|Project|License|Sources (.NET6)|Sources (original)| Author (original) |
+|-------|-------|---------------|------------------|-------------------|
+|Fizzler|[LGPL](https://github.com/sst-soft/Fizzler/blob/master/COPYING.txt)|[GitHub](https://github.com/sst-soft/Fizzler)|[GitHub](https://github.com/atifaziz/Fizzler)|Atif Aziz (@atifaziz)|
+|ExCSS|[MIT](https://github.com/sst-soft/ExCSS/blob/master/license.txt)|[GitHub](https://github.com/sst-soft/ExCSS)|[GitHub](https://github.com/Unity-Technologies/ExCSS)|Tyler Brinks (@tylerbrinks), Unity-Technologies (@Unity-Technologies)|
+
 
 # Original Readme.md
 <details><summary>Click to open Readme.md</summary>
